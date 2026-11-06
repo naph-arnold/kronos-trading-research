@@ -274,6 +274,7 @@ Legend: **Completed** (implemented + tests) · **Verified** (also confirmed agai
 | Live integration (`-m integration`) | Python 3.11.18, network | **6 passed, 2 skipped (blocked: MT5 terminal; testnet keys)** — reported separately, not counted above |
 | BTC research rerun | commit `a8259e7` | holdout/walk-forward identical to `9c3f1aa` |
 | Secret / order-path scan of Phase 2 diff | `git diff e54e903..HEAD` | no credentials; order tokens only in tests asserting they are unreachable |
+| GitHub Actions `fast-checks` (manual dispatch) | ubuntu-latest, Python 3.11 | **pass** — 351 passed, ruff clean, pip-audit clean ([run 42271518334](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42271518334)) |
 
 ### Remaining external dependencies
 1. MT5 demo terminal + account (and broker commission per lot) — unblocks Phase 2A data, spec verification,
