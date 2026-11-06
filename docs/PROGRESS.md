@@ -183,7 +183,8 @@ out-of-sample splits and net costs. No execution adapters (Phase 3) until review
 ## Milestone: Phase 2 — market research pipelines (2026-11-06)
 
 Branch: `feat/phase2-market-research`, stacked on `feat/phase1-risk-foundations` (PR #10, itself stacked on #9).
-Neither #9 nor #10 was merged at branch time. Code commit `9c3f1aa`. Details and full tables: `docs/phase2-research.md`.
+Neither #9 nor #10 was merged at branch time. Code commit `9c3f1aa`, docs `d8a24b2`. Pull request:
+[#11](https://github.com/naph-arnold/kronos-trading-research/pull/11) (open, not merged). Details and full tables: `docs/phase2-research.md`.
 
 ### Added
 - Read-only connectors: `trading/connectors/mt5.py` (allowlist proxy, demo enforcement, symbol/spec discovery with
@@ -207,6 +208,7 @@ Neither #9 nor #10 was merged at branch time. Code commit `9c3f1aa`. Details and
 | CI fast-checks command list | Python 3.11.18 | **309 passed**; ruff clean |
 | `pip-audit -r requirements-trading.txt` | 3.11 | No known vulnerabilities |
 | BTCUSDT research run (twice, identical) | 3.11, commit `9c3f1aa` | See table below |
+| GitHub Actions `fast-checks` (manual dispatch) | ubuntu-latest, Python 3.11 | **pass** — 309 passed, ruff clean, pip-audit clean for both requirement files ([run 42264691412](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42264691412)) |
 
 BTCUSDT holdout (2026-05-24 → 2026-11-06, 3,964 h; fee assumed 0.10%/side): trend +0.78% (12 trades),
 breakout +1.11% (31), Kronos-mini −20.15% (247; +3.13% gross), trend+Kronos filter −0.18% (7), buy-and-hold −1.13%
