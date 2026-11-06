@@ -11,6 +11,12 @@ Before making changes, read:
 - Automated **demo** execution only. Never place live orders, use production trading API keys, or enable automatic live mode.
 - Pre-trade risk budget: intended risk <= 0.5% of current account equity per trade; fail closed if sizing or market/account metadata are uncertain. Losses may exceed this risk due to gaps/slippage.
 - AI agents (Scout, News, Chart, Kronos Analyst, Skeptic, Coordinator), Kronos, and TradingView are inputs only; deterministic risk checks have veto authority.
+
+## AI architecture (authoritative)
+- **Trading intelligence = xAI Grok.** All six reasoning agents (Scout, News, Chart, Kronos Analyst, Skeptic, Coordinator) must call the **official xAI Grok API** (`https://api.x.ai`, key in `XAI_API_KEY`, never committed). No other LLM provider may act as a trading agent.
+- **Forecasting = Kronos.** The Kronos model in `model/` is the only financial time-series forecaster; agents consume its output, they do not replace it.
+- **Claude Code is the development tool only.** Claude writes, tests and documents code in this repository; it is not a runtime trading-intelligence provider and must not be wired into the decision path.
+- **No AI bypass.** Agent, Kronos and TradingView outputs are advisory inputs recorded for provenance. Only `trading.risk.evaluate` (via `trading.gate.PreTradeGate`) can approve a demo order; no agent consensus, prompt or tool call may skip, override or relax it.
 - Proposed additional per-account guardrails to test: daily drawdown halt 1.5%, aggregate stop-risk 1%; avoid presenting as validated strategies.
 
 ## Workflow on every session
