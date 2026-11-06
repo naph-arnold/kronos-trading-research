@@ -1,0 +1,64 @@
+name: KR-05 Binance extended history backfill
+
+# One-time integration test: no schedule and no real trading.
+on:
+  push:
+    branches: [feat/kr05-backtesting]
+    paths:
+      - ".github/workflows/kr05-history.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kr05-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Checkout separate durable historical data
+        run: |
+          git fetch origin market-data
+          git worktree add --detach data-store origin/market-data
+      - name: Backfill 90 days of validated Binance spot BTCUSDT hourly candles
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from time import time
+          from research.datasets import update_dataset
+          from research.market_data import INTERVAL_MS
+
+          step = INTERVAL_MS["1h"]
+          end_ms = (int(time() * 1000) // step) * step
+          destination = Path("data-store/datasets/BTCUSDT_1h_research.csv")
+          manifest = destination.with_suffix(".csv.json")
+          start_ms = (json.loads(manifest.read_text())["start_ms"]
+                      if manifest.exists() else end_ms - 90 * 24 * step)
+          result = update_dataset(destination, symbol="BTCUSDT", interval="1h",
+                                  start_ms=start_ms, end_ms=end_ms, now_ms=end_ms,
+                                  source="binance_spot")
+          print(f"Validated {result['row_count']} historical candles; new={result['new_rows']}")
+          PY
+      - name: Preserve historical dataset and SHA-256 manifest
+        run: |
+          git -C data-store config user.name "github-actions[bot]"
+          git -C data-store config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C data-store add datasets/BTCUSDT_1h_research.csv datasets/BTCUSDT_1h_research.csv.json
+          if git -C data-store diff --cached --quiet; then
+            echo "History already current"
+          else
+            git -C data-store commit -m "data: preserve validated 90-day Binance research history"
+            git -C data-store push origin HEAD:market-data
+          fi
