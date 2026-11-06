@@ -377,7 +377,8 @@ Minimum lot: 3,000 USD allows stops ≤ 14.67 USD → only 8–43% of 2026 signa
 
 ### Tests
 `python -m pytest -q tests --ignore=tests/test_kronos_regression.py` → **378 passed, 8 integration deselected**
-(Python 3.11.18); ruff clean.
+(Python 3.11.18); ruff clean. GitHub Actions `fast-checks` on `41fa5d6`: **374 passed**, ruff and pip-audit clean
+([run 42289799965](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42289799965)).
 
 ### Next step
 Build the read-only shadow forward-test runner (live closed M15 bars, simulated fills from live ticks, no order
