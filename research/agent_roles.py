@@ -1,4 +1,4 @@
-"""Provider-neutral task specifications for six Grok-compatible research bots.
+"""Task specifications for the six reasoning agents, served by the official xAI Grok API.
 
 These are *instructions/contracts*, not deployed Grok bots. The model-generated
 RoleReview fields are untrusted; a future trusted adapter must bind identity,
@@ -26,20 +26,20 @@ ROLE_TASKS = {
         "trend, volatility and nearby price levels based on observed, not future, data. "
         "Never claim forecasts are certainties."
     ),
-    "strategist": (
-        "Write a concrete *hypothetical* BTCUSDT spot long/cash setup with entry, stop, "
-        "target, expiry and invalidation. No shorting or leverage. Abstain if evidence "
-        "cannot support a setup; do not place orders."
-    ),
-    "risk": (
-        "Objectively challenge the sizing and exposure of the proposed simulation. "
-        "Reject stale data, unclear stop, excessive notional, open exposure or losses. "
-        "Do not override deterministic paper limits."
+    "kronos_analyst": (
+        "Interpret the Kronos forecast supplied by the read-only forecast API (cite its dataset hash, "
+        "model id and horizon). Compare it with the naive previous-close baseline and recent forecast "
+        "error; state uncertainty explicitly. Never treat a forecast as a certainty or a trade instruction."
     ),
     "skeptic": (
         "Actively challenge the proposed trade. Seek opposing evidence, regime changes, "
         "backtest failures, news timing problems, slippage and overfitting. Reject or "
         "abstain unless the setup survives scrutiny."
+    ),
+    "coordinator": (
+        "Consolidate the other five reviews into a single recommendation (approve, reject or abstain) "
+        "with the conflicting points listed. The deterministic risk engine still decides; the "
+        "coordinator cannot change stops, sizing, limits, calendars or execution mode."
     ),
 }
 

@@ -103,7 +103,7 @@ def build_xauusd_calendar(template: TradingCalendar, start: date, end: date,
         closure.validate()
     closures = tuple(sorted(set(template.closures) | set(cme["closures"])
                             | {(c.start, c.end) for c in broker_closures}))
-    calendar = replace(template, closures=closures)
+    calendar = replace(template, closures=closures, verification="rule_based")
     calendar.validate()
     provenance = {**cme["provenance"], "holidays": cme["holidays"], "early_closes": cme["early_closes"],
                   "broker_closures": [{"start": c.start.isoformat(), "end": c.end.isoformat(), "kind": c.kind,
@@ -127,3 +127,18 @@ def compare_with_bars(bars: Sequence[Bar], calendar: TradingCalendar) -> dict:
             moment += step
     return {"bars_in_closed_time": in_closed, "missing_in_open_time": missing,
             "consistent": not in_closed and not missing}
+
+
+def mark_broker_verified(calendar: TradingCalendar, bars: Sequence[Bar], *, offset_verified: bool,
+                         min_bars: int = 2000) -> TradingCalendar:
+    """Promote a calendar to "broker_verified" only if the broker's own recent history agrees
+    with it (no bars in closed time, no missing bars in open time) and the server offset was
+    verified. Otherwise raise; the gate keeps rejecting XAUUSD entries."""
+    report = compare_with_bars(bars, calendar)
+    if not offset_verified:
+        raise ValidationError("Server time offset not verified")
+    if len(bars) < min_bars or not report["consistent"]:
+        raise ValidationError(f"Broker history does not confirm the calendar ({len(bars)} bars, "
+                              f"{len(report['bars_in_closed_time'])} in closed time, "
+                              f"{len(report['missing_in_open_time'])} missing)")
+    return replace(calendar, verification="broker_verified")

@@ -11,7 +11,12 @@
   "exchange_info_snapshot": "data/processed/binance_btcusdt_exchangeinfo_public.json",
   "kronos_forecasts": "data/processed/kronos_mini_btcusdt_1h_holdout.json",
   "holdout_fraction": 0.15,
-  "walk_forward": {"train_bars": 4380, "test_bars": 1460, "anchored": false, "min_train_trades": 8},
+  "walk_forward": {
+    "train_bars": 4380,
+    "test_bars": 1460,
+    "anchored": false,
+    "min_train_trades": 8
+  },
   "warmup_bars": 400,
   "initial_equity": "10000",
   "costs": {
@@ -19,20 +24,86 @@
     "spread_bps": "1",
     "slippage_allowance_usdt": "10"
   },
-  "risk": {"risk_fraction": "0.005", "max_spread_usdt": "100", "max_entry_deviation_fraction": "0.005"},
-  "event_blackout": {"provider": "federalreserve.gov/fomccalendars", "enabled": true},
+  "risk": {
+    "risk_fraction": "0.005",
+    "max_spread_usdt": "100",
+    "max_entry_deviation_fraction": "0.005"
+  },
+  "event_blackout": {
+    "provider": "federalreserve.gov/fomccalendars",
+    "enabled": true,
+    "sensitivity_minutes": [
+      [
+        0,
+        0
+      ],
+      [
+        15,
+        30
+      ],
+      [
+        30,
+        60
+      ],
+      [
+        60,
+        120
+      ]
+    ],
+    "note": "Sensitivity is measured on the research period only (never the holdout)."
+  },
   "strategies": {
     "trend": {
-      "grid": {"ema_fast": [10, 20, 50], "ema_slow": [100, 200], "atr_stop_mult": [1.5, 2.5], "reward_to_risk": [2.0, 3.0]}
+      "grid": {
+        "ema_fast": [
+          10,
+          20,
+          50
+        ],
+        "ema_slow": [
+          100,
+          200
+        ],
+        "atr_stop_mult": [
+          1.5,
+          2.5
+        ],
+        "reward_to_risk": [
+          2.0,
+          3.0
+        ]
+      }
     },
     "breakout": {
-      "grid": {"lookback": [24, 48, 96], "volume_mult": [1.2, 1.5, 2.0], "atr_stop_mult": [1.5, 2.5]}
+      "grid": {
+        "lookback": [
+          24,
+          48,
+          96
+        ],
+        "volume_mult": [
+          1.2,
+          1.5,
+          2.0
+        ],
+        "atr_stop_mult": [
+          1.5,
+          2.5
+        ]
+      }
     },
     "kronos": {
-      "fixed_params": {"min_edge_bps": 20.0, "trend_ema": 200, "atr_stop_mult": 1.5},
+      "fixed_params": {
+        "min_edge_bps": 20.0,
+        "trend_ema": 200,
+        "atr_stop_mult": 1.5
+      },
       "max_holding_bars": 1,
       "note": "Pre-registered from KR-05 (20 bps edge); not tuned. Forecasts exist only for the holdout."
     },
-    "kronos_filtered_trend": {"min_edge_bps": 0.0, "note": "Uses trend parameters selected on research data."}
+    "kronos_filtered_trend": {
+      "min_edge_bps": 0.0,
+      "note": "Uses trend parameters selected on research data."
+    }
   }
 }

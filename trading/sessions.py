@@ -41,6 +41,9 @@ class TradingCalendar:
     open_buffer: timedelta = timedelta(minutes=15)  # no new trades just after an open (wide spreads)
     close_buffer: timedelta = timedelta(minutes=15)  # nor just before a close
     always_open: bool = field(default=False)
+    # "template" (unconfirmed), "rule_based" (exchange holiday rules added), "broker_verified"
+    # (template + holidays confirmed against broker history and a verified server offset).
+    verification: str = "template"
 
     def validate(self) -> None:
         if not self.always_open and not self.windows:
@@ -134,7 +137,7 @@ XAUUSD_NY_CLOSE_TEMPLATE = TradingCalendar(symbol="XAUUSD", server_tz=NY_CLOSE, 
 
 BTCUSDT_ALWAYS_OPEN = TradingCalendar(symbol="BTCUSDT", server_tz=ServerTimeZone("UTC", timedelta(0)),
                                       windows=(), open_buffer=timedelta(0), close_buffer=timedelta(0),
-                                      always_open=True)
+                                      always_open=True, verification="broker_verified")  # 24/7 venue
 
 
 def validate_session_bars(bars: Sequence[Bar], calendar: TradingCalendar) -> list[tuple[datetime, datetime]]:

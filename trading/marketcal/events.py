@@ -5,7 +5,7 @@ import json
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from trading.common import ValidationError, check_identifier, require_utc
@@ -32,6 +32,8 @@ class EconomicEvent:
     forecast: str | None = None
     actual: str | None = None
     source_url: str | None = None
+    series: str | None = None  # canonical series key, e.g. US_CPI, US_NFP, US_GDP, FOMC_DECISION
+    reference_period: str | None = None  # period the release describes, e.g. "2026-10" or "3rd Quarter 2026"
 
     def validate(self) -> None:
         check_identifier(self.event_id, "event_id")
@@ -74,7 +76,9 @@ class EventStore:
             "CREATE TABLE IF NOT EXISTS revisions (event_id TEXT NOT NULL, recorded_at TEXT NOT NULL, "
             "body TEXT NOT NULL);"
             "CREATE TABLE IF NOT EXISTS refreshes (provider TEXT PRIMARY KEY, refreshed_at TEXT NOT NULL, "
-            "event_count INTEGER NOT NULL);")
+            "event_count INTEGER NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS failures (provider TEXT PRIMARY KEY, failed_at TEXT NOT NULL, "
+            "error TEXT NOT NULL);")
 
     def upsert(self, events: list[EconomicEvent]) -> dict:
         changed = 0
@@ -110,6 +114,32 @@ class EventStore:
             self._db.execute("INSERT INTO refreshes VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET "
                              "refreshed_at=excluded.refreshed_at, event_count=excluded.event_count",
                              (provider, at.isoformat(), count))
+
+    def record_failure(self, provider: str, at: datetime, error: str) -> None:
+        require_utc(at, "at")
+        with self._lock:
+            self._db.execute("INSERT INTO failures VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                             "failed_at=excluded.failed_at, error=excluded.error",
+                             (provider, at.isoformat(), error[:500]))
+
+    def last_failure(self, provider: str) -> tuple[datetime, str] | None:
+        with self._lock:
+            row = self._db.execute("SELECT failed_at, error FROM failures WHERE provider=?", (provider,)).fetchone()
+        return (datetime.fromisoformat(row[0]), row[1]) if row else None
+
+    def contradictions(self, start: datetime, end: datetime, *, tolerance: timedelta = timedelta(minutes=1),
+                       window: timedelta = timedelta(days=3)) -> list[dict]:
+        """Same `series` reported by different providers at times that disagree by more than `tolerance`
+        (but within `window`, i.e. plausibly the same release). Such data is not trusted."""
+        events = [e for e in self.between(start - window, end + window) if e.series and e.status != "cancelled"]
+        conflicts = []
+        for i, a in enumerate(events):
+            for b in events[i + 1:]:
+                if (a.series == b.series and a.provider != b.provider
+                        and tolerance < abs(a.scheduled_at - b.scheduled_at) <= window):
+                    conflicts.append({"series": a.series, "a": (a.provider, a.scheduled_at.isoformat()),
+                                      "b": (b.provider, b.scheduled_at.isoformat())})
+        return conflicts
 
     def last_refresh(self, provider: str) -> datetime | None:
         with self._lock:

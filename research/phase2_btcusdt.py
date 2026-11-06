@@ -149,7 +149,29 @@ def run(config: dict, *, fetch_exchange_info: bool, fetch_fomc: bool) -> dict:
 
     best_trend = evaluate_tuned("trend_following", TrendFollowing, TrendParams(),
                                 config["strategies"]["trend"]["grid"])
-    evaluate_tuned("breakout", Breakout, BreakoutParams(), config["strategies"]["breakout"]["grid"])
+    best_breakout = evaluate_tuned("breakout", Breakout, BreakoutParams(), config["strategies"]["breakout"]["grid"])
+
+    # Event-buffer sensitivity on the RESEARCH period only (buffers are configurable, not assumed optimal).
+    from trading.marketcal.blackout import BlackoutRule
+    sensitivity = {}
+    for before, after in config["event_blackout"].get("sensitivity_minutes", []):
+        rules = (BlackoutRule(before=timedelta(minutes=before), after=timedelta(minutes=after)),)
+        variant = (EventBlackout(store=store, market=MARKET, rules=rules, max_calendar_age=None)
+                   if before or after else None)
+        row = {}
+        for name, cls, params in (("trend_following", TrendFollowing, best_trend),
+                                  ("breakout", Breakout, best_breakout)):
+            res = run_replay(bars[:research_end], cls(params, tick_size=instrument.tick_size),
+                             instrument=instrument, limits=limits, environment=environment, initial_equity=initial,
+                             spread=spread, event_guard=variant, close_at_end=True)
+            m = metrics(res, interval="1h")
+            row[name] = {"net_return_pct": m["net_return_pct"], "trades": m["trades"],
+                         "max_drawdown_pct": m["max_drawdown_pct"],
+                         "blocked_by_events": res["rejection_reasons"].get("Event blackout", 0)}
+        sensitivity[f"-{before}/+{after} min"] = row
+    report["event_buffer_sensitivity_research_period"] = {
+        "events": "FOMC decisions only (official historical calendar); CPI/NFP schedules not available offline",
+        "results": sensitivity}
 
     # Kronos: pre-registered parameters, holdout only (forecasts exist only there).
     kronos_report = json.loads(Path(config["kronos_forecasts"]).read_text(encoding="utf-8"))
@@ -215,6 +237,9 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(to_jsonable(report), indent=2) + "\n", encoding="utf-8")
     print(summary_table(report))
+    for label, row in report.get("event_buffer_sensitivity_research_period", {}).get("results", {}).items():
+        print(f"buffer {label}: " + "; ".join(f"{k} {v['net_return_pct']}% ({v['trades']} trades, "
+                                              f"{v['blocked_by_events']} blocked)" for k, v in row.items()))
     for name, item in report["strategies"].items():
         wf = item.get("walk_forward")
         if wf:

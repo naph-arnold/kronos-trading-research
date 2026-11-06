@@ -61,7 +61,8 @@ def parse_fomc_calendar(html: str, *, retrieved_at: datetime) -> list[EconomicEv
                 + (" (with Summary of Economic Projections)" if sep else ""),
                 country="US", currency="USD", scheduled_at=statement_time_utc(day), impact="high",
                 provider=PROVIDER, retrieved_at=retrieved_at, updated_at=retrieved_at, category="central_bank",
-                status="tentative" if unscheduled else "scheduled", all_day=unscheduled, source_url=SOURCE_URL))
+                status="tentative" if unscheduled else "scheduled", all_day=unscheduled, source_url=SOURCE_URL,
+                series="FOMC_DECISION"))
     if not events:
         raise ValidationError("No FOMC meetings found; page layout may have changed (fail closed)")
     for event in events:
