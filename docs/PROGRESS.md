@@ -17,8 +17,8 @@ Updated: 2026-11-06
 ## Technical implementation
 - [x] Phase 0: Inventory existing repository and confirm actual baseline and tests (2026-11-06, see below).
 - [x] Phase 1: Shared schema, risk engine, test suite and data validation — implemented and verified locally on Python 3.11 (CI pins) and 3.14; pull request open for review (see milestones below). Not merged.
-- [ ] Phase 2A: XAUUSD strategy research and MT5 demo data.
-- [ ] Phase 2B: BTC/USDT strategy research and Binance Spot Testnet data.
+- [ ] Phase 2A: XAUUSD strategy research and MT5 demo data. **Code complete and tested with fakes/synthetic data; blocked on an MT5 demo terminal — no XAUUSD market results yet.**
+- [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
 - [ ] Phase 3: Independent automated demo execution adapters.
 - [ ] Phase 4: Kronos, six Grok agents and TradingView integrations.
 - [ ] Phase 5: Monitored continuous demo validation.
@@ -177,6 +177,55 @@ Phase 2A/2B data foundations (parallel, no AI dependence): MT5 demo connection r
 server-offset verification, UTC history with `validate_session_bars`) for XAUUSD; Binance Spot Testnet read-only
 metadata/filters and balances for BTCUSDT; then baseline non-AI strategy backtests through `trading.replay` with
 out-of-sample splits and net costs. No execution adapters (Phase 3) until reviewed.
+
+---
+
+## Milestone: Phase 2 — market research pipelines (2026-11-06)
+
+Branch: `feat/phase2-market-research`, stacked on `feat/phase1-risk-foundations` (PR #10, itself stacked on #9).
+Neither #9 nor #10 was merged at branch time. Code commit `9c3f1aa`. Details and full tables: `docs/phase2-research.md`.
+
+### Added
+- Read-only connectors: `trading/connectors/mt5.py` (allowlist proxy, demo enforcement, symbol/spec discovery with
+  verification status, server-time verification, UTC history with raw server times and spreads) and
+  `trading/connectors/binance.py` (public data + Spot Testnet signed GET account; path allowlist; no credentials logged).
+- Strategies: XAUUSD GoldPilot V1, Order Block Retest, Liquidity Sweep + MSS, Opening Range Breakout (London/NY);
+  BTCUSDT Kronos forecast, trend following, breakout, Kronos-filtered trend, buy-and-hold benchmark. No prior
+  GoldPilot implementation existed in the repository or its history.
+- `trading/indicators.py`, `trading/evaluation.py`, replay extensions (HistoryView, spread model, time exits,
+  gross/cost/net, exposure, event guard), EU DST rule and London/New York zones in `trading/clock.py`.
+- Market calendar (`trading/marketcal/`): CME gold holidays/early closes, broker closures, official FOMC parser,
+  revisioned event store, deterministic news blackouts wired into `trading.risk.evaluate`.
+- Runners/configs: `research/phase2_btcusdt.py`, `research/phase2_xauusd.py`, `research/configs/`.
+- `requirements-trading.txt` (pandas_market_calendars 5.5.0, MetaTrader5 5.0.6231 on Windows); CI installs/audits it.
+
+### Verified results
+| Check | Environment | Result |
+| --- | --- | --- |
+| Full fast suite | Python 3.11.18, numpy 1.26.4, pandas 2.2.2 | **313 passed** |
+| Full fast suite | Python 3.14.3, pandas 3.1.1 | **313 passed** |
+| CI fast-checks command list | Python 3.11.18 | **309 passed**; ruff clean |
+| `pip-audit -r requirements-trading.txt` | 3.11 | No known vulnerabilities |
+| BTCUSDT research run (twice, identical) | 3.11, commit `9c3f1aa` | See table below |
+
+BTCUSDT holdout (2026-05-24 → 2026-11-06, 3,964 h; fee assumed 0.10%/side): trend +0.78% (12 trades),
+breakout +1.11% (31), Kronos-mini −20.15% (247; +3.13% gross), trend+Kronos filter −0.18% (7), buy-and-hold −1.13%
+(DD 25%). Walk-forward OOS (12 windows): trend −6.33%, breakout −15.45%. Kronos-mini holdout MAE 213.9 vs naive
+187.9. **No robust edge; all strategies experimental.**
+
+### Blockers / decisions needed
+- **MT5:** no terminal on this machine; Phase 2A data, spec verification and XAUUSD backtests require an MT5 demo
+  account (steps in `docs/phase2-research.md`). Broker commission must be supplied from broker documentation.
+- **Binance testnet keys:** absent; fee rate is assumed until `/api/v3/account` commission rates are read.
+- **Economic calendar provider:** CPI/NFP/GDP schedules and forecast/actual values need a licensed provider or
+  operator-supplied files (BLS returned HTTP 403 to automated requests; not bypassed).
+- **Instructions truncated** at Section 9.3; blackout behaviour implemented as interpreted; handling of open
+  positions around events and any later sections still to be confirmed.
+
+### Next step
+Operator provides an MT5 demo terminal (and optionally testnet keys and a calendar provider decision); then run
+Phase 2A discovery/download/backtest and testnet verification. Phase 3 execution adapters remain out of scope until
+reviewed.
 
 ---
 

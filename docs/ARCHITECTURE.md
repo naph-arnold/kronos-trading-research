@@ -39,6 +39,16 @@ Binance Spot Testnet for BTC/USDT only initially, with testnet-specific keys and
 5. No live execution: `EXECUTION_MODE=demo` and live credentials not available to the process. Fail closed on any disagreement.
 6. Realized loss can exceed planned risk due to gaps, partial fills, slippage and stop failures.
 
+## Market-calendar intelligence (Phase 2)
+- Deterministic, provider-attributed data only: CME Globex gold holidays/early closes (rule-based library), official
+  Federal Reserve FOMC calendar, operator/broker closure notices, and licensed economic-calendar feeds once chosen.
+- Shared event store with revision history; market-specific rules (XAUUSD and BTCUSDT have separate calendars,
+  blackout rules and breakers).
+- Closures from all sources are unioned (most restrictive wins). The risk engine's `event_guard` blocks new entries
+  around high-impact events and fails closed when required calendar data is stale. AI agents may read the calendar
+  but cannot open a closed market or shorten a blackout.
+- Venue connectors in Phase 2 are read-only (MT5 allowlist proxy; Binance GET-only path allowlist).
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.
