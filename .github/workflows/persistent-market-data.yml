@@ -6,7 +6,7 @@ on:
   schedule:
     - cron: '17 2 * * *'  # approximately 05:17 Africa/Nairobi; GitHub may delay jobs
   push:
-    branches: [develop/trading-system]
+    branches: [develop/trading-system, fix/binance-market-data]
     paths:
       - "research/**"
       - ".github/workflows/persistent-market-data.yml"
