@@ -1,0 +1,10 @@
+{
+  "end_ms": 1793959200000,
+  "interval": "1h",
+  "row_count": 168,
+  "schema_version": 1,
+  "sha256": "db622170f96fd8eaf100150f3d49cf388e8424732d57d05e7f8fa6f7ec3a0cf0",
+  "source": "coinbase_exchange",
+  "start_ms": 1793354400000,
+  "symbol": "BTCUSD"
+}
