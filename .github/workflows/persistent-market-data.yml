@@ -6,7 +6,7 @@ on:
   schedule:
     - cron: '17 2 * * *'  # approximately 05:17 Africa/Nairobi; GitHub may delay jobs
   push:
-    branches: [develop/trading-system]
+    branches: [develop/trading-system, fix/binance-market-data]
     paths:
       - "research/**"
       - ".github/workflows/persistent-market-data.yml"
@@ -37,7 +37,7 @@ jobs:
         run: |
           git fetch origin market-data
           git worktree add --detach data-store origin/market-data
-      - name: Retrieve only missing closed Coinbase BTC-USD hourly candles
+      - name: Retrieve only missing closed Binance BTCUSDT hourly candles
         run: |
           python - <<'PY'
           from datetime import datetime, timedelta, timezone
@@ -45,12 +45,12 @@ jobs:
           from research.datasets import update_dataset
           from research.market_data import INTERVAL_MS, parse_time
 
-          symbol = "BTCUSD"
+          symbol = "BTCUSDT"
           interval = "1h"
           step = INTERVAL_MS[interval]
           now = datetime.now(timezone.utc)
           end_ms = (int(now.timestamp() * 1000) // step) * step
-          destination = Path("data-store/datasets/BTCUSD_1h.csv")
+          destination = Path("data-store/datasets/BTCUSDT_1h.csv")
           # Bootstrap 7 days, then reuse the manifest's original start.
           manifest = destination.with_suffix(".csv.json")
           if manifest.exists():
@@ -61,18 +61,18 @@ jobs:
           result = update_dataset(
               destination, symbol=symbol, interval=interval,
               start_ms=start_ms, end_ms=end_ms, now_ms=end_ms,
-              source="coinbase_exchange"
+              source="binance_spot"
           )
-          print(f"Verified {result['row_count']} candles, added {result['new_rows']}; SHA256={result['sha256']}")
+          print(f"Verified Binance {result['row_count']} candles, added {result['new_rows']}; SHA256={result['sha256']}")
           PY
       - name: Save validated public data into durable branch
         run: |
           git -C data-store config user.name "github-actions[bot]"
           git -C data-store config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C data-store add datasets/BTCUSD_1h.csv datasets/BTCUSD_1h.csv.json
+          git -C data-store add datasets/BTCUSDT_1h.csv datasets/BTCUSDT_1h.csv.json
           if git -C data-store diff --cached --quiet; then
             echo "No new complete market candles."
           else
-            git -C data-store commit -m "data: refresh validated BTCUSD 1h candles"
+            git -C data-store commit -m "data: refresh validated BTCUSDT 1h candles"
             git -C data-store push origin HEAD:market-data
           fi
