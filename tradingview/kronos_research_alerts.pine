@@ -1,0 +1,21 @@
+//@version=6
+indicator("Kronos Research Desk — EMA alert source (NO ORDERS)", overlay=true)
+
+// Research-only conditions. These are *not* an established trading edge.
+// Set the chart to BINANCE:BTCUSDT, 1h and create TWO separate alerts.
+// Use the alert's "Once Per Bar Close" frequency.
+fastLength = input.int(20, "Fast EMA", minval=2)
+slowLength = input.int(50, "Slow EMA", minval=3)
+fast = ta.ema(close, fastLength)
+slow = ta.ema(close, slowLength)
+plot(fast, "Fast EMA", color=color.aqua)
+plot(slow, "Slow EMA", color=color.orange)
+bull = barstate.isconfirmed and ta.crossover(fast, slow)
+bear = barstate.isconfirmed and ta.crossunder(fast, slow)
+
+// TradingView substitutes {{time}} (bar OPEN UTC) and {{close}} on delivery.
+// Signal recipients must independently verify Binance candles.
+alertcondition(bull, title="Kronos research: bullish EMA cross",
+     message='{"schema_version":1,"source":"tradingview","exchange":"BINANCE","symbol":"BTCUSDT","interval":"1h","event":"ema_bull_cross","bar_time":"{{time}}","bar_close":"{{close}}"}')
+alertcondition(bear, title="Kronos research: bearish EMA cross",
+     message='{"schema_version":1,"source":"tradingview","exchange":"BINANCE","symbol":"BTCUSDT","interval":"1h","event":"ema_bear_cross","bar_time":"{{time}}","bar_close":"{{close}}"}')
