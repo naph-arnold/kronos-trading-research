@@ -31,3 +31,9 @@ Source: [Binance Spot API — Kline/Candlestick data](https://github.com/binance
 ## Next
 
 Add manifest/checksums, durable object storage, incremental ingestion and automated alerting before unattended scheduling. Feed a validated static dataset into chronological walk-forward backtesting; **never** mix future values into model inputs.
+
+## Incremental storage and integrity manifests
+
+Use `python -m research.datasets --symbol BTCUSDT --interval 1h --start 2026-10-01T00:00:00Z --end 2026-10-08T00:00:00Z --output research/output/BTCUSDT_1h.csv` to create a SHA-256-verifiable CSV and JSON manifest. Run it again with a later end timestamp to fetch **only missing completed candles**. Missing or corrupted files, inconsistent manifests, mismatched market settings, and gaps are rejected; nothing is silently repaired.
+
+The GitHub download workflow now emits both the CSV and manifest. Each GitHub Actions run begins on an ephemeral machine, so successive workflow runs still fetch a new dataset rather than incrementally extending the prior artifact. Reliable **cross-run** incremental ingestion requires durable storage (e.g., a secured object store and checkpoint state). The current implementation provides incremental updates on persistent local volumes only; no continuous schedule is activated.
