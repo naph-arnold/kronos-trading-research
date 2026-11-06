@@ -1,7 +1,5 @@
 """Offline deterministic tests for public OHLCV collector."""
 import csv
-from datetime import datetime, timezone
-
 import pytest
 
 from research.market_data import (
