@@ -43,3 +43,20 @@ A separate `KR-05 Binance extended history backfill` GitHub workflow obtains 90 
 3. Evaluate signal stability, data quality, market impact, gaps, execution delay, and latency before a trading integration.
 4. Compare against buy-and-hold and cash, not only forecast MAE.
 5. Real Binance order execution and credentials are strictly out of scope. Live trading remains disabled.
+
+## Observed extended test result — 6 November 2026
+
+[GitHub Actions run 42202721082](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42202721082) executed **240** chronological held-out hourly close forecasts using the separately verified **2,160-candle / 90-day** Binance BTCUSDT dataset (SHA-256 `286aa248af609f941313881cba9198b6fc46209b5c35133d0a9336cea394d504`). The tested targets covered 240 hours, not 90 full days. Results, **under assumed execution costs**, were:
+
+| Diagnostic | Observed result |
+| --- | ---: |
+| Kronos-mini forecast MAE | 249.98 USDT |
+| Previous-close naive forecast MAE | 218.67 USDT |
+| Simulated strategy net return | **-9.98%** |
+| Simulated buy-and-hold net return | -4.77% |
+| Simulated cash return | 0.00% |
+| Simulated round-trip trades | 29 |
+| Profitable simulated trades | 24.14% |
+| Model strategy max drawdown | 9.98% |
+
+**Conclusion:** the evaluated long/cash strategy underperformed both cash and buy-and-hold in this window, and the forecast model had higher MAE than the naive close baseline. These results **do not support live deployment**. Costs are assumptions, and there is not yet a statistically robust multi-regime assessment. Changing signal thresholds based on this holdout would introduce selection bias: any revised parameters must be evaluated on a new untouched future holdout or independent historical period.
