@@ -1,8 +1,10 @@
 name: Persistent OHLCV data verification
 
-# Development-triggered integration check. Cron scheduling is deliberately
-# withheld until real exchange access and persistence are verified.
+# Daily schedule runs only when this workflow reaches the default branch.
+# Development pushes provide an integration check before promotion.
 on:
+  schedule:
+    - cron: '17 2 * * *'  # approximately 05:17 Africa/Nairobi; GitHub may delay jobs
   push:
     branches: [develop/trading-system]
     paths:
