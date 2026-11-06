@@ -74,6 +74,17 @@ providers (official/licensed, attributed)        market-specific rules          
 4. On timeout/invalid output the adapter raises `NewsAgentUnavailable`; verified closures, blackouts and risk limits
    continue unchanged.
 
+## Research validation protocol (Phase 2C)
+- Data partitions are explicit: training (diagnostics, sensitivity, baselines), a holdout that may be evaluated once,
+  and genuinely unseen forward data for final validation. A holdout once inspected is never reused for selection.
+- Every strategy is compared per trade with random-entry baselines using the same exits, costs, risk engine and
+  long/short mix, and with a simple non-AI trend baseline; beating unbiased random entries in a trending market is
+  not evidence of skill.
+- Cost model: verified tick value, tick-sampled spreads (bar `spread` is a minimum), verified swap; commission and
+  slippage are labelled estimates with stress scenarios.
+- Forward tests are pre-registered (frozen parameters, criteria, checkpoints) and run in shadow mode (read-only data,
+  simulated fills, no order calls) until Phase 3 is explicitly authorized.
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.

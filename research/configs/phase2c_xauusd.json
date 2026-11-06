@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "name": "phase2c-xauusd-robustness",
+  "data_partition": {
+    "training": "first 80% of M15 bars (2022-09-01 -> 2025-12-30): all diagnostics, sensitivity, baselines, cost stress",
+    "previously_seen_holdout": "last 20% (2025-12-30 -> 2026-11-06): evaluated once in Phase 2A; NOT used for any new choice",
+    "unseen_validation": "forward data after 2026-11-06 (pre-registered forward test); older M15 history is not available (terminal maxbars)"
+  },
+  "dataset": {
+    "csv": "data/raw/mt5_xauusd_15m.csv"
+  },
+  "specification": "data/processed/mt5_xauusd_discovery.json",
+  "phase2a_report": "research/output/phase2_xauusd_metaquotes_demo.json",
+  "tick_spreads": "data/processed/mt5_xauusd_tick_spreads.json",
+  "server_tz": "eet_eu",
+  "events_file": "data/processed/fomc_events.json",
+  "holdout_fraction": 0.2,
+  "equities": [
+    "3000",
+    "25000"
+  ],
+  "unconstrained_equity": "25000",
+  "costs": {
+    "base": {
+      "commission": "0",
+      "slippage": "0.10",
+      "spread": "tick_calibrated"
+    },
+    "phase2a": {
+      "commission": "0",
+      "slippage": "0.10",
+      "spread": "bar_floor_0.15"
+    },
+    "stress": {
+      "commission": "7",
+      "slippage": "0.30",
+      "spread": "tick_calibrated_mean"
+    }
+  },
+  "risk": {
+    "risk_fraction": "0.005",
+    "max_spread": "1.00"
+  },
+  "max_holding_bars": {
+    "orb_london": 16,
+    "orb_newyork": 16
+  },
+  "sensitivity_grids": {
+    "goldpilot_v1": {
+      "adx_min": [
+        15,
+        25
+      ],
+      "atr_stop_mult": [
+        1.0,
+        1.5,
+        2.5
+      ],
+      "reward_to_risk": [
+        1.5,
+        2.0,
+        3.0
+      ]
+    },
+    "order_block_retest": {
+      "impulse_atr_mult": [
+        1.2,
+        1.5,
+        2.0
+      ],
+      "reward_to_risk": [
+        1.5,
+        2.0,
+        3.0
+      ]
+    },
+    "liquidity_sweep_mss": {
+      "mss_window_bars": [
+        4,
+        8,
+        16
+      ],
+      "reward_to_risk": [
+        1.5,
+        2.0,
+        3.0
+      ]
+    },
+    "orb_london": {
+      "range_minutes": [
+        15,
+        30,
+        60
+      ],
+      "stop_at": [
+        "mid",
+        "opposite"
+      ],
+      "reward_to_risk": [
+        1.0,
+        1.5,
+        2.0
+      ]
+    },
+    "orb_newyork": {
+      "range_minutes": [
+        15,
+        30,
+        60
+      ],
+      "stop_at": [
+        "mid",
+        "opposite"
+      ],
+      "reward_to_risk": [
+        1.0,
+        1.5,
+        2.0
+      ]
+    }
+  },
+  "baselines": {
+    "random_seeds": 20,
+    "random_families": {
+      "random_1.5atr_2r": {
+        "entry_probability": 0.004,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": 2.0
+      },
+      "random_1.0atr_1.5r_time16": {
+        "entry_probability": 0.004,
+        "atr_stop_mult": 1.0,
+        "reward_to_risk": 1.5,
+        "max_holding_bars": 16
+      },
+      "random_1.5atr_2r_long67": {
+        "entry_probability": 0.004,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": 2.0,
+        "long_probability": 0.67
+      },
+      "random_1.0atr_1.5r_time16_long51": {
+        "entry_probability": 0.004,
+        "atr_stop_mult": 1.0,
+        "reward_to_risk": 1.5,
+        "max_holding_bars": 16,
+        "long_probability": 0.51
+      }
+    },
+    "h1_trend": {
+      "ema_fast": 50,
+      "ema_slow": 200,
+      "atr_stop_mult": 3.0,
+      "reward_to_risk": 2.0
+    }
+  },
+  "eligibility_balances": [
+    "1000",
+    "3000",
+    "5000",
+    "10000",
+    "25000",
+    "50000"
+  ],
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 7
+  },
+  "workers": 8,
+  "swap": {
+    "source": "MT5 symbol_info (read-only), MetaQuotes-Demo 2026-11-06",
+    "mode": "points",
+    "long_points_per_lot_night": -12.6,
+    "short_points_per_lot_night": -4.6,
+    "usd_per_point_per_lot": 1.0,
+    "triple_weekday_server": "Wednesday",
+    "rollover": "server midnight (EET/EU)"
+  }
+}

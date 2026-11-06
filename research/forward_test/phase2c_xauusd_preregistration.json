@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "title": "Phase 2C pre-registered XAUUSD forward test (shadow mode, no orders)",
+  "registered_at": "2026-11-06T23:59:00+00:00",
+  "status": "registered - not started (requires a read-only shadow runner; no order placement is authorized)",
+  "data": "XAUUSD M15 closed bars from MetaQuotes-Demo via the read-only MT5 connector, server tz eet_eu",
+  "unseen_window_starts": "2026-11-09T00:00:00+00:00",
+  "candidates": [
+    {
+      "id": "xau-orb-newyork",
+      "version": "1.0.0",
+      "params": {
+        "session": "newyork",
+        "range_minutes": 30,
+        "entry_window_minutes": 180,
+        "atr_period": 14,
+        "breakout_buffer_atr": 0.1,
+        "min_range_atr": 0.5,
+        "max_range_atr": 3.0,
+        "stop_at": "opposite",
+        "reward_to_risk": 1.5
+      },
+      "params_hash": "c00dae9ee89b0a65",
+      "max_holding_bars": 16,
+      "role": "candidate",
+      "rationale": "Only strategy whose entries beat all 20 long-bias-matched random-entry seeds per trade (training); gross +0.03 R/trade but net -0.013 R after costs - forward test checks whether the entry information survives live costs."
+    }
+  ],
+  "controls": [
+    {
+      "id": "xau-baseline-h1-ema-cross",
+      "version": "1.0.0",
+      "params": {
+        "ema_fast": 50,
+        "ema_slow": 200,
+        "atr_period": 14,
+        "atr_stop_mult": 3.0,
+        "reward_to_risk": 2.0
+      },
+      "params_hash": "e8257efa97a2b2a3",
+      "role": "non-AI control"
+    },
+    {
+      "id": "xau-baseline-random",
+      "family": "random_1.0atr_1.5r_time16_long51",
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "role": "random-entry control with the candidate's exit structure"
+    }
+  ],
+  "rules": {
+    "no_parameter_changes": true,
+    "risk_fraction": "0.005",
+    "account_equity_assumption_usd": "10000 (demo balance recommendation; 0.5% unchanged)",
+    "costs": "spread from live ticks at the simulated fill time; slippage 0.10 USD/side; commission 0 and 7 USD/lot scenarios; swap from symbol_info",
+    "fills": "next bar open after the signal bar close (same as replay); stop-first intrabar"
+  },
+  "evaluation": {
+    "checkpoints": [
+      "after 50 trades",
+      "after 100 trades or 2027-05-09, whichever is later"
+    ],
+    "success_criteria_all_required": [
+      "net mean R per trade > 0 under the 7 USD/lot commission scenario",
+      "bootstrap 95% CI lower bound of net mean R > -0.05",
+      "candidate per-trade net R above the median of the random-entry control seeds",
+      "positive net result in at least 2 of 3 consecutive two-month blocks",
+      "max drawdown < 6% of equity at 0.5% risk"
+    ],
+    "failure": "Any criterion failing at the final checkpoint retires the candidate; no re-tuning on forward data."
+  },
+  "not_candidates": {
+    "xau-goldpilot-v1": "edge over random explained by long bias in the 2022-2025 bull market; costs exceed gross edge; 3/18 configurations profitable",
+    "xau-orderblock-retest": "0/9 configurations profitable on training; beats only 13/20 long-matched random seeds",
+    "xau-liquidity-sweep-mss": "1/9 configurations profitable; shorts lose; 14/20 random seeds beaten",
+    "xau-orb-london": "negative in every training year; 0/18 configurations profitable; significantly negative at 3,000 USD (t=-2.2)"
+  }
+}

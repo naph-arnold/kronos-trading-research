@@ -378,6 +378,31 @@ class Mt5ReadOnlyConnector:
         return out
 
 
+def _tick_rows(mt5, name: str, server_start: datetime, server_end: datetime):
+    flags = getattr(mt5, "COPY_TICKS_INFO", 1)  # bid/ask changes
+    return mt5.copy_ticks_range(name, server_start, server_end, flags)
+
+
+def read_ticks(conn: "Mt5ReadOnlyConnector", name: str, start: datetime, end: datetime,
+               *, chunk: timedelta = timedelta(hours=6)) -> list[tuple[datetime, float, float]]:
+    """Read-only bid/ask ticks in [start, end) UTC as (utc_time, bid, ask), converted from server time."""
+    mt5 = conn._require()
+    mt5.symbol_select(name, True)
+    out, cursor = [], start
+    while cursor < end:
+        nxt = min(cursor + chunk, end)
+        rows = _tick_rows(mt5, name, conn.server_tz.to_server(cursor).replace(tzinfo=timezone.utc),
+                          conn.server_tz.to_server(nxt).replace(tzinfo=timezone.utc))
+        if rows is None:
+            raise Mt5Unavailable(f"copy_ticks_range failed: {mt5.last_error()}")
+        for row in rows:
+            bid, ask = float(row["bid"]), float(row["ask"])
+            if bid > 0 and ask >= bid:
+                out.append((conn.server_tz.server_msc_to_utc(int(row["time_msc"])), bid, ask))
+        cursor = nxt
+    return out
+
+
 def spread_statistics(bars: list[Mt5Bar], point: Decimal) -> dict:
     """Observed spread distribution from MT5 bar spread fields (points -> price units)."""
     if not bars:

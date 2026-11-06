@@ -155,6 +155,7 @@ def run_replay(
                        "entry": position.entry, "exit": exit_price, "opened_at": position.opened_at,
                        "closed_at": when, "exit_reason": reason, "pnl": pnl, "gross_pnl": gross,
                        "costs": gross - pnl, "planned_risk": position.planned_risk,
+                       "stop": position.stop, "take_profit": position.take_profit,
                        "bars_held": position.bars_held,
                        "r_multiple": pnl / position.planned_risk if position.planned_risk else None})
         position = None

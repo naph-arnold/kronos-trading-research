@@ -340,5 +340,51 @@ minimum-lot rejections at 3,000 USD; at 10,000/25,000 USD equity every strategy 
 
 ---
 
+## Milestone: Phase 2C — XAUUSD strategy validation and robustness (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). Research only; no orders; strategy rules, Phase 2A parameters and the
+0.5% risk fraction unchanged. Full report: `docs/phase2c-robustness.md`.
+
+### What was done
+- Training-only analyses (2022-09 → 2025-12, 78,600 M15 bars) via `research/phase2c_robustness.py`: diagnostics at
+  3,000 and 25,000 USD, 72-configuration parameter sensitivity, 80 random-entry baseline runs (unbiased and
+  long-bias-matched), H1 EMA-cross baseline, cost stress, minimum-lot eligibility, regime/session/volatility/year/side
+  breakdowns, bootstrap confidence intervals.
+- Verified costs from the terminal (read-only): 2.1 M ticks (spread p50 0.17, mean 0.24 USD), swap (long −12.6,
+  short −4.6 USD/lot/night, Wednesday ×3). Commission remains **unverified**.
+- Checked for smaller gold contracts (none on MetaQuotes-Demo) and older M15 history (none: terminal `maxbars`).
+- Pre-registered a shadow-mode forward test: `research/forward_test/phase2c_xauusd_preregistration.json`.
+
+### Findings (training, 25,000 USD, base costs)
+| Strategy | Net % | Gross % | Mean R | Beats matched random | Configs profitable | Recommendation |
+| --- | --- | --- | --- | --- | --- | --- |
+| GoldPilot V1 | −15.1 | +18.6 | −0.028 | 12/20 | 3/18 | No forward test |
+| Order Block Retest | −6.2 | +17.4 | −0.017 | 13/20 | 0/9 | No forward test |
+| Liquidity Sweep + MSS | −7.9 | +5.5 | −0.023 | 14/20 | 1/9 | No forward test |
+| ORB London | −21.1 | +1.0 | −0.061 | 18/20 | 0/18 | Retire |
+| ORB New York | −5.5 | +9.5 | −0.013 | 20/20 | 1/18 | **Shadow forward test** |
+Main failure modes: costs > gross edge at tight stops; gross profits largely long bias in the 2022–2025 bull market.
+Minimum lot: 3,000 USD allows stops ≤ 14.67 USD → only 8–43% of 2026 signals eligible; 10,000 USD → 81–98%.
+
+### Component status
+| Component | Status |
+| --- | --- |
+| Phase 2C robustness research (training-only) | **Completed** (real broker data) |
+| XAUUSD spread and swap costs | **Verified** (tick sample / symbol_info) |
+| XAUUSD commission and slippage | **Estimated** (scenarios); commission verification **Blocked** (broker docs or authorized demo trade) |
+| Forward test (ORB New York + controls) | **Not started** — pre-registered; needs a read-only shadow runner |
+| Execution / order placement | Not started (not authorized) |
+
+### Tests
+`python -m pytest -q tests --ignore=tests/test_kronos_regression.py` → **378 passed, 8 integration deselected**
+(Python 3.11.18); ruff clean.
+
+### Next step
+Build the read-only shadow forward-test runner (live closed M15 bars, simulated fills from live ticks, no order
+functions), switch the demo balance to 10,000 USD if possible, confirm commission, then start the pre-registered
+forward window. No execution adapters until explicitly authorized.
+
+---
+
 ## Update policy
 Only mark items done when code, tests or verifiable operational evidence exists. For every milestone add date, branch/commit, command/test results, blockers, and next step. Do not treat plans or historical conversation claims as verified implementation.
