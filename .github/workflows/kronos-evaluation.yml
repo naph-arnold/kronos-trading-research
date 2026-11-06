@@ -1,0 +1,49 @@
+name: Kronos Binance forecast evaluation
+
+on:
+  push:
+    branches: [feat/kronos-binance-inference]
+    paths:
+      - "research/evaluate_kronos.py"
+      - ".github/workflows/kronos-evaluation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout evaluation code
+        uses: actions/checkout@v4
+      - name: Checkout verified Binance dataset
+        run: |
+          git fetch --depth 1 origin market-data
+          git show origin/market-data:datasets/BTCUSDT_1h.csv > /tmp/BTCUSDT_1h.csv
+          git show origin/market-data:datasets/BTCUSDT_1h.csv.json > /tmp/BTCUSDT_1h.csv.json
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install CPU inference dependencies
+        run: |
+          python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+      - name: Run held-out Kronos-mini evaluation
+        run: |
+          python -m research.evaluate_kronos \
+            --csv /tmp/BTCUSDT_1h.csv \
+            --symbol BTCUSDT --interval 1h \
+            --lookback 128 --evaluations 8 \
+            --output research/output/kronos_btcusdt_evaluation.json
+      - name: Retain evaluation record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos-binance-evaluation
+          path: research/output/kronos_btcusdt_evaluation.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -31,13 +31,15 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install development tools
-        run: python -m pip install -r requirements-dev.txt
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install numpy==1.26.4 pandas==2.2.2
       - name: Check Python syntax
         run: python -m compileall -q model examples tests webui research
       - name: Lint project configuration and smoke tests
-        run: ruff check research/market_data.py research/datasets.py research/coinbase_data.py tests/test_project_smoke.py tests/test_market_data.py tests/test_datasets.py tests/test_coinbase_data.py
+        run: ruff check research/market_data.py research/datasets.py research/coinbase_data.py tests/test_project_smoke.py tests/test_market_data.py tests/test_datasets.py tests/test_coinbase_data.py research/evaluate_kronos.py tests/test_kronos_evaluation.py
       - name: Run fast tests (no model downloads)
-        run: python -m pytest -q tests/test_project_smoke.py tests/test_market_data.py tests/test_datasets.py
+        run: python -m pytest -q tests/test_project_smoke.py tests/test_market_data.py tests/test_datasets.py tests/test_kronos_evaluation.py
       - name: Audit declared dependencies
         run: pip-audit -r requirements.txt --progress-spinner off
 
