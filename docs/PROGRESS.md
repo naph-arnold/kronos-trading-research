@@ -112,7 +112,8 @@ persistent breaker) before Phase 2A/2B data work. No execution adapters until si
 
 ## Milestone: Phase 1 completion — sessions, persistence, daily accounting (2026-11-06)
 
-Branch: `feat/phase1-risk-foundations` (stacked on PR #9's docs branch). Pull request opened for review; **not merged**.
+Branch: `feat/phase1-risk-foundations` (stacked on PR #9's docs branch), commits `43d0e84`, `1686299`, `325bada`.
+Pull request: [#10](https://github.com/naph-arnold/kronos-trading-research/pull/10), opened for review; **not merged**.
 
 ### Added / changed
 - `trading/clock.py`: MT5 server-time → UTC (`ServerTimeZone`, NY-close UTC+2/+3 with US DST, fixed offsets),
@@ -145,6 +146,7 @@ Branch: `feat/phase1-risk-foundations` (stacked on PR #9's docs branch). Pull re
 | `pip-audit -r requirements.txt` | Python 3.11.18 | No known vulnerabilities found |
 | Upstream model regression `tests/test_kronos_regression.py` | Python 3.11.18, torch 2.5.1+cpu, Kronos-small from Hugging Face | **4 passed** (94.8 s) |
 | `ruff check research tests trading` | ruff 0.11.13 | All checks passed |
+| GitHub Actions `Research CI` / `fast-checks` (manual dispatch on the branch, since CI triggers only on PRs to `master`) | ubuntu-latest, Python 3.11 | **pass** — ruff clean, **246 passed**, pip-audit clean ([run 42258475473](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42258475473)); `model-regression` job skipped (opt-in input) |
 
 Test files: risk 75, gate/demo-guard/AI-path 31, market data/signals 17, replay 10, clock/sessions 20,
 breaker/daily 15 (168 new; 82 pre-existing research tests unchanged and passing).
@@ -168,7 +170,7 @@ no AI provider imports in `trading/`.
 - Planned risk is not a loss bound (gaps/slippage/partial fills; demonstrated by a replay test).
 - Role names in `research/six_agent_desk.py` (`strategist`, `risk`) differ from the six Grok roles in
   ARCHITECTURE.md (`Kronos Analyst`, `Coordinator`); the Grok API adapter does not exist yet (Phase 4).
-- Not yet run on GitHub Actions; local evidence only until the PR's CI completes.
+- CI `pull_request` trigger covers only `master`/`develop/trading-system`, so stacked PRs need a manual dispatch.
 
 ### Next development phase
 Phase 2A/2B data foundations (parallel, no AI dependence): MT5 demo connection read-only (symbol metadata,
