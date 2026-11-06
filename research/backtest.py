@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 
 from research.datasets import load_verified
-from research.market_data import DataValidationError, parse_time
+from research.market_data import DataValidationError
 
 
 def _safe_number(value: object, name: str) -> float:
