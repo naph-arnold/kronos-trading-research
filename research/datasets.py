@@ -36,7 +36,7 @@ def _write_manifest(path: Path, record: dict) -> None:
         staged.unlink(missing_ok=True)
 
 
-def load_verified(csv_path: Path, *, symbol: str, interval: str, start_ms: int) -> list[dict]:
+def load_verified(csv_path: Path, *, symbol: str, interval: str, start_ms: int, source: str = "binance_spot") -> list[dict]:
     manifest_path = csv_path.with_suffix(csv_path.suffix + ".json")
     if not csv_path.exists() and not manifest_path.exists():
         return []
@@ -52,7 +52,7 @@ def load_verified(csv_path: Path, *, symbol: str, interval: str, start_ms: int) 
     except (OSError, ValueError, csv.Error) as exc:
         raise DataValidationError("Stored dataset cannot be read") from exc
     if (metadata.get("schema_version") != 1
-            or metadata.get("source") != "binance_spot"
+            or metadata.get("source") != source
             or metadata.get("symbol") != symbol
             or metadata.get("interval") != interval
             or metadata.get("start_ms") != start_ms):
@@ -72,7 +72,7 @@ def load_verified(csv_path: Path, *, symbol: str, interval: str, start_ms: int) 
 
 def update_dataset(
     csv_path: Path, *, symbol: str, interval: str, start_ms: int, end_ms: int,
-    now_ms: int | None = None, fetcher=None,
+    now_ms: int | None = None, fetcher=None, source: str = "binance_spot",
 ) -> dict:
     """Append only missing complete candles; stop rather than fill gaps.
 
@@ -81,12 +81,21 @@ def update_dataset(
     """
     if interval not in INTERVAL_MS:
         raise ValueError("Unsupported interval")
+    if source not in ("binance_spot", "coinbase_exchange"):
+        raise ValueError("Unsupported data provider")
+    if source == "coinbase_exchange" and interval not in ("1m", "5m", "15m", "1h", "1d"):
+        raise ValueError("Unsupported Coinbase granularity")
+    if source == "coinbase_exchange" and symbol not in ("BTCUSD", "ETHUSD"):
+        raise ValueError("Unsupported Coinbase symbol")
+    if fetcher is None and source == "coinbase_exchange":
+        from research.coinbase_data import fetch_page as coinbase_fetch
+        fetcher = coinbase_fetch
     if not symbol.isascii() or not symbol.isalnum() or len(symbol) > 20:
         raise ValueError("Invalid symbol")
     step = INTERVAL_MS[interval]
     if start_ms % step or end_ms % step or start_ms >= end_ms:
         raise ValueError("Requested range must contain whole UTC candles")
-    existing = load_verified(csv_path, symbol=symbol, interval=interval, start_ms=start_ms)
+    existing = load_verified(csv_path, symbol=symbol, interval=interval, start_ms=start_ms, source=source)
     cursor = parse_time(existing[-1]["timestamps"]) + step if existing else start_ms
     if end_ms < cursor:
         raise DataValidationError("Requested end precedes stored coverage; refusing truncation")
@@ -105,7 +114,7 @@ def update_dataset(
         save_csv(combined, csv_path)
         metadata = {
             "schema_version": 1,
-            "source": "binance_spot",
+            "source": source,
             "symbol": symbol,
             "interval": interval,
             "start_ms": start_ms,
@@ -121,7 +130,8 @@ def update_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Incrementally update verified spot OHLCV CSV")
-    parser.add_argument("--symbol", choices=("BTCUSDT", "ETHUSDT"), default="BTCUSDT")
+    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument("--source", choices=("binance_spot", "coinbase_exchange"), default="binance_spot")
     parser.add_argument("--interval", choices=INTERVAL_MS, default="1h")
     parser.add_argument("--start", required=True, help="UTC ISO 8601 inclusive boundary")
     parser.add_argument("--end", required=True, help="UTC ISO 8601 exclusive boundary")
@@ -129,7 +139,7 @@ def main() -> None:
     args = parser.parse_args()
     print(json.dumps(update_dataset(
         args.output, symbol=args.symbol, interval=args.interval,
-        start_ms=parse_time(args.start), end_ms=parse_time(args.end),
+        start_ms=parse_time(args.start), end_ms=parse_time(args.end), source=args.source,
     ), indent=2))
 
 
