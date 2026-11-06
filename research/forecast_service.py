@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import random
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from research.datasets import load_verified
