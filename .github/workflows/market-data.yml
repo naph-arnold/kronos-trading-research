@@ -1,0 +1,72 @@
+name: Download historical market data
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Binance spot market pair"
+        required: true
+        type: choice
+        options: [BTCUSDT, ETHUSDT]
+        default: BTCUSDT
+      interval:
+        description: "UTC candle interval"
+        required: true
+        type: choice
+        options: [1h, 4h, 1d]
+        default: 1h
+      days:
+        description: "Number of recent UTC days of historical candles (1-30)"
+        required: true
+        type: number
+        default: 7
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download and validate UTC candles
+        env:
+          MARKET_SYMBOL: ${{ inputs.symbol }}
+          MARKET_INTERVAL: ${{ inputs.interval }}
+          MARKET_DAYS: ${{ inputs.days }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          from datetime import datetime, timedelta, timezone
+          days = int(os.environ["MARKET_DAYS"])
+          if not 1 <= days <= 30:
+              raise SystemExit("days must be 1-30")
+          now = datetime.now(timezone.utc)
+          interval = os.environ["MARKET_INTERVAL"]
+          interval_hours = {"1h": 1, "4h": 4, "1d": 24}[interval]
+          rounded = now.replace(hour=(now.hour // interval_hours) * interval_hours, minute=0, second=0, microsecond=0)
+          if interval == "1d":
+              rounded = now.replace(hour=0, minute=0, second=0, microsecond=0)
+          start = rounded - timedelta(days=days)
+          symbol = os.environ["MARKET_SYMBOL"]
+          output = f"research/output/{symbol}_{interval}_{start:%Y%m%d}_{rounded:%Y%m%d}.csv"
+          subprocess.run([sys.executable, "-m", "research.datasets",
+                          "--symbol", symbol, "--interval", interval,
+                          "--start", start.isoformat(), "--end", rounded.isoformat(),
+                          "--output", output], check=True)
+          PY
+      - name: Upload validated data (research artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-ohlcv
+          path: |
+            research/output/*.csv
+            research/output/*.csv.json
+          if-no-files-found: error
+          retention-days: 14
