@@ -1,5 +1,4 @@
 """Offline checks for integrity manifests and gap-safe incremental fetching."""
-import csv
 import json
 
 import pytest
