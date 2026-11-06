@@ -33,7 +33,7 @@ def evaluate_rows(rows: list[dict], *, lookback: int = 128, evaluations: int = 8
     frame = pd.DataFrame(rows)
     frame["timestamps"] = pd.to_datetime(frame["timestamps"], utc=True)
     for field in ("open", "high", "low", "close"):
-        frame[field] = pd.to_numeric(frame[field], errors="raise")
+        frame[field] = pd.to_numeric(frame[field], errors="coerce")
     if not np.isfinite(frame[["open", "high", "low", "close"]].to_numpy()).all():
         raise ValueError("Nonfinite input candles")
     if predictor is None:
