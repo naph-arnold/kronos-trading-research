@@ -74,4 +74,9 @@ venv.bak/
 temp/
 tmp/
 .python-version
-\n# Research datasets and temporary outputs\ndata/raw/\ndata/processed/\nresearch/output/\n*.csv.tmp\n
+# Research datasets and temporary outputs
+data/raw/
+data/processed/
+research/output/
+*.csv.tmp
+.venv311/

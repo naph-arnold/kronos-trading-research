@@ -7,9 +7,20 @@ Status: **Design approved, implementation not verified** (2026-11-06).
 - Operation: **automated demo trading** only. No live order permissions or fallback.
 - Risk: **at most 0.5% of current account equity intended loss per new trade**, based on stop distance and contract specifications; gaps, slippage and failures can exceed it.
 - Core: Python orchestrator; Kronos forecasts are research inputs, not automatic trade authorization.
-- AI: six role-based Grok reviewers (Scout, News, Chart, Kronos Analyst, Skeptic, Coordinator); AI consensus cannot bypass deterministic checks.
+- AI: six role-based Grok reviewers (Scout, News, Chart, Kronos Analyst, Skeptic, Coordinator); AI consensus cannot bypass deterministic checks. See *AI architecture* below.
 - TradingView: optional signal/alert ingestion; verify authenticity, timestamp freshness, deduplicate and never authorize solely on alerts.
 - Independent per-market account state, orders, model performance and kill switches.
+
+## AI architecture (authoritative)
+| Component | Provider | Role | Authority |
+| --- | --- | --- | --- |
+| Scout, News, Chart, Kronos Analyst, Skeptic, Coordinator | **Official xAI Grok API** (`https://api.x.ai`, scoped `XAI_API_KEY` stored outside Git) | Reasoning/review agents producing versioned, schema-validated advisory outputs | Advisory only |
+| Kronos (`model/`) | Local Kronos foundation model | Financial time-series forecasting | Advisory only |
+| TradingView | Webhook alerts | Optional signal/alert input | Advisory only |
+| Deterministic risk engine (`trading/risk.py`, `trading/gate.py`) | Python code, no AI | Sizing, limits, vetoes | **Sole approval authority** |
+| Claude Code | Anthropic (development tooling) | Writes, tests and documents this repository | **None at runtime** — not part of the trading decision path |
+
+Rules: no other LLM provider acts as a trading agent; Grok agents consume Kronos output rather than forecasting prices themselves; all AI outputs are recorded in the audit trail as `advisory` inputs and are never passed to the risk engine; when Grok is unavailable the system degrades to no-trade or non-AI baselines, never to relaxed limits.
 
 ## Logical flow
 Market data (MT5, Binance, TradingView) -> normalization and freshness validation -> strategy-specific candidate signal -> Kronos/Grok enrichment and adversarial review -> deterministic risk checks -> *separate* demo execution adapters -> order reconciliation and audit -> monitoring.
