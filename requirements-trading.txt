@@ -1,0 +1,5 @@
+# Phase 2 trading-research dependencies (kept separate from upstream Kronos runtime requirements).
+# pandas_market_calendars 5.5.0 is the newest release compatible with the CI pin pandas==2.2.2.
+pandas_market_calendars==5.5.0
+# Official MetaTrader 5 Python package (Windows only). Used read-only via trading.connectors.mt5.
+MetaTrader5==5.0.6231; sys_platform == "win32"

@@ -69,7 +69,7 @@ def test_invalid_timezone_configuration_rejected():
     with pytest.raises(ValidationError):
         ServerTimeZone("bad", timedelta(minutes=7))
     with pytest.raises(ValidationError):
-        ServerTimeZone("bad", timedelta(hours=2), timedelta(hours=3), "eu")
+        ServerTimeZone("bad", timedelta(hours=2), timedelta(hours=3), "jp")
 
 
 def test_verify_server_offset_with_fresh_tick():

@@ -148,13 +148,17 @@ def test_mt5_non_demo_account_modes_rejected(mode):
 
 
 def test_trading_package_contains_no_order_routing():
-    """Phase 1 has no executor; assert no order endpoints or MT5 order calls slipped in."""
-    forbidden = ("order_send", "/api/v3/order", "api.binance.com", "fapi.binance", "sapi/")
-    for path in (ROOT / "trading").glob("*.py"):
+    """No executor before Phase 3: no order endpoints, MT5 order calls, POST/DELETE, or HTTP client libraries."""
+    forbidden = ("order_send", "order_check", "/api/v3/order", "api.binance.com", "fapi.binance", "sapi/",
+                 'method="POST"', 'method="DELETE"', "import requests", "import httpx", "import ccxt")
+    files = sorted((ROOT / "trading").rglob("*.py"))
+    assert any(p.parent.name == "connectors" for p in files)
+    for path in files:
         source = path.read_text(encoding="utf-8")
         ast.parse(source)
         assert not any(token in source for token in forbidden), path
-        assert "import MetaTrader5" not in source and "requests" not in source, path
+        if path.name != "mt5.py" or path.parent.name != "connectors":
+            assert "import MetaTrader5" not in source, path
 
 
 def test_size_is_decimal_not_float(tmp_path):
@@ -191,7 +195,7 @@ def test_no_ai_provider_in_deterministic_decision_path():
     forbidden = ("import openai", "import anthropic", "from openai", "from anthropic", "xai_sdk", "api.x.ai",
                  "from model", "import model", "import torch", "research.six_agent_desk import decide",
                  "research.forecast")
-    for path in (ROOT / "trading").glob("*.py"):
+    for path in (ROOT / "trading").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert not any(token in source for token in forbidden), path
 

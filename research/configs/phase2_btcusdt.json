@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "name": "phase2b-btcusdt-1h",
+  "dataset": {
+    "csv": "data/raw/binance_btcusdt_1h_2023-11_2026-11.csv",
+    "symbol": "BTCUSDT",
+    "interval": "1h",
+    "source": "binance_spot",
+    "expected_sha256": "d45a535d4f87a2c47fbc0e80b0b8124da96f1cb12a1ab761afdd7df0e6fbf6ff"
+  },
+  "exchange_info_snapshot": "data/processed/binance_btcusdt_exchangeinfo_public.json",
+  "kronos_forecasts": "data/processed/kronos_mini_btcusdt_1h_holdout.json",
+  "holdout_fraction": 0.15,
+  "walk_forward": {"train_bars": 4380, "test_bars": 1460, "anchored": false, "min_train_trades": 8},
+  "warmup_bars": 400,
+  "initial_equity": "10000",
+  "costs": {
+    "taker_fee_rate": "0.001",
+    "spread_bps": "1",
+    "slippage_allowance_usdt": "10"
+  },
+  "risk": {"risk_fraction": "0.005", "max_spread_usdt": "100", "max_entry_deviation_fraction": "0.005"},
+  "event_blackout": {"provider": "federalreserve.gov/fomccalendars", "enabled": true},
+  "strategies": {
+    "trend": {
+      "grid": {"ema_fast": [10, 20, 50], "ema_slow": [100, 200], "atr_stop_mult": [1.5, 2.5], "reward_to_risk": [2.0, 3.0]}
+    },
+    "breakout": {
+      "grid": {"lookback": [24, 48, 96], "volume_mult": [1.2, 1.5, 2.0], "atr_stop_mult": [1.5, 2.5]}
+    },
+    "kronos": {
+      "fixed_params": {"min_edge_bps": 20.0, "trend_ema": 200, "atr_stop_mult": 1.5},
+      "max_holding_bars": 1,
+      "note": "Pre-registered from KR-05 (20 bps edge); not tuned. Forecasts exist only for the holdout."
+    },
+    "kronos_filtered_trend": {"min_edge_bps": 0.0, "note": "Uses trend parameters selected on research data."}
+  }
+}

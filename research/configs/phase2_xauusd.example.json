@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "phase2a-xauusd-m15 (EXAMPLE - fill paths after running `discover` and `download` on an MT5 demo)",
+  "dataset": {"csv": "data/raw/mt5_xauusd_m15.csv"},
+  "specification": "data/processed/mt5_xauusd_discovery.json",
+  "server_tz": "ny_close",
+  "broker_closures": null,
+  "events_file": "data/processed/fomc_events.json",
+  "accept_calendar_differences": false,
+  "holdout_fraction": 0.2,
+  "walk_forward": {"train_bars": 17280, "test_bars": 5760, "min_train_trades": 10},
+  "warmup_bars": 1200,
+  "initial_equity": "10000",
+  "costs": {"min_spread": "0.10", "slippage_allowance": "0.10"},
+  "risk": {"risk_fraction": "0.005", "max_spread": "1.00"},
+  "strategies": {
+    "goldpilot": {"strategy": "goldpilot", "grid": {"adx_min": [20, 25], "atr_stop_mult": [1.5, 2.0], "reward_to_risk": [2.0]}},
+    "orderblock": {"strategy": "orderblock", "grid": {"impulse_atr_mult": [1.5, 2.0], "reward_to_risk": [2.0]}},
+    "sweep": {"strategy": "sweep", "grid": {"mss_window_bars": [8, 16], "reward_to_risk": [2.0]}},
+    "orb_london": {"strategy": "orb", "fixed": {"session": "london"}, "grid": {"range_minutes": [30, 60]}, "max_holding_bars": 16},
+    "orb_newyork": {"strategy": "orb", "fixed": {"session": "newyork"}, "grid": {"range_minutes": [30, 60]}, "max_holding_bars": 16}
+  }
+}
