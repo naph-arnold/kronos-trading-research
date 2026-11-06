@@ -27,5 +27,11 @@ Before making changes, read:
 5. Update `docs/PROGRESS.md` with evidence (files, tests, commit references), blockers and next action.
 6. Stop for review before changing execution permissions, broker connections, API permissions, or any high-impact action.
 
+## Market calendar and data safety
+- Calendar data must come from identified, verifiable providers (`trading/marketcal/`): CME gold holiday rules, Federal Reserve, BEA, ECB, BLS API values, operator/licensed structured files. Never invent schedules; closures are unioned; stale, missing or contradictory calendar data rejects new entries.
+- The calendar service and risk engine run without Grok. The News Agent may interpret and recommend, but its output is validated by `trading/agents/news.py` and can never change schedules, closures, stops, risk limits or execution mode.
+- Venue connectors stay read-only until Phase 3 is explicitly authorized (MT5 allowlist proxy; Binance GET-only).
+- Tests needing live network, a broker terminal or credentials are marked `integration` and are deselected by default; report them separately and never count skips as passes.
+
 ## Current assignment
-Start with Phase 0 repository inventory and gap analysis, then Phase 1 foundations/risk unit tests. Do not proceed to live trading. Preserve upstream Kronos history and functionality. Existing documentation PR is draft #9.
+Phases 0–1 are done (PR #10); Phase 2 is in review (PR #11, stacked on #10 → #9). Phase 2A market results are blocked until an MT5 demo terminal is available. Do not start Phase 3 execution adapters, merge PRs, or enable order placement without explicit authorization. Progress status vocabulary in `docs/PROGRESS.md`: Completed, Verified, Partially implemented, Blocked, Not started.

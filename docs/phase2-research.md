@@ -29,7 +29,7 @@ Guarded failure modes with tests: lookahead (prefix invariance for every strateg
 ## Phase 2B results — BTCUSDT 1h (Binance public data)
 
 Run: `python -m research.phase2_btcusdt --config research/configs/phase2_btcusdt.json --output research/output/phase2_btcusdt.json`
-(reproduced twice with identical results). Commit `9c3f1aa`, config SHA-256 `5e77bfa0…`, dataset SHA-256
+(reproduced at commits `9c3f1aa` and `a8259e7` with identical holdout/walk-forward results). First commit `9c3f1aa`, config SHA-256 `5e77bfa0…`, dataset SHA-256
 `d45a535d…` (26,424 candles, 2023-11-01 → 2026-11-06). Research bars 22,460; holdout 3,964 bars
 (2026-05-24 20:00 → 2026-11-06 00:00 UTC). Costs: taker fee 0.10% per side (**assumed** — testnet commission not
 verified), spread 1 bp, slippage allowance 10 USDT on entry and stop. Exchange filters from live public
@@ -51,6 +51,19 @@ verified), spread 1 bp, slippage allowance 10 USDT on entry and stop. Exchange f
 | --- | --- | --- | --- | --- | --- |
 | Trend following | 24 | **−6.33%** | 6 / 12 | 65 | 2.58 pp |
 | Breakout | 18 | **−15.45%** | 3 / 12 | 180 | 3.32 pp |
+
+**Event-buffer sensitivity (research period only, FOMC events only; parameters selected on this same period, so
+these are in-sample sensitivities, not OOS evidence)** — commit `a8259e7`:
+
+| Blackout (before/after FOMC) | Trend net % (trades, blocked) | Breakout net % (trades, blocked) |
+| --- | --- | --- |
+| none | +2.11 (61, 0) | −3.01 (205, 0) |
+| −15/+30 min (BTC default) | +2.11 (61, 0) | −3.01 (205, 1) |
+| −30/+60 min | +2.11 (61, 0) | −2.03 (203, 3) |
+| −60/+120 min | +2.11 (61, 0) | −2.03 (203, 4) |
+
+FOMC-only blackouts affect very few hourly signals; CPI/NFP buffers cannot be evaluated historically until a
+schedule provider is configured. Buffers therefore stay configurable defaults, not tuned values.
 
 **Kronos forecast quality on the holdout:** MAE 213.9 USDT vs naive previous-close 187.9 USDT —
 Kronos-mini was *worse* than the naive baseline over 3,964 one-step forecasts (consistent with KR-04/KR-05).
@@ -78,32 +91,67 @@ and SYNTHETIC data only; synthetic results are never reported as market evidence
 
 ## Market-calendar intelligence (Section 9)
 
-### Provider evaluation
+### Provider evaluation (9.1)
 
-| Source | Coverage | XAUUSD relevance | Updates | Cost / licence | Decision |
-| --- | --- | --- | --- | --- | --- |
-| `pandas_market_calendars` CMEGlobex_Gold | CME gold holidays, early closes, session hours (rule-based, incl. future years) | High (spot gold follows COMEX/Globex closures; broker may differ) | Library releases | Free, MIT | **Implemented** as default holiday source; broker overrides take precedence (union) |
-| Federal Reserve FOMC calendar page | FOMC meetings (current + next year, history) | Very high | Fed updates page; dates fixed a year ahead | Free, US government work | **Implemented** (`trading/marketcal/fomc.py`); statement at 14:00 ET |
-| BLS release schedule (CPI, NFP) | Official US labour/inflation release dates | Very high | Annual schedule + revisions | Free, public domain | **Not integrated**: automated requests from this environment received HTTP 403; we did not attempt to bypass it. Options: operator-exported file via `load_events_file`, or a licensed vendor |
-| BEA release schedule (GDP, PCE) | Official dates | High | Annual | Free | Not yet evaluated in code |
-| Trading Economics API | Global calendar, forecast/actual/previous, importance | High | Real time | Paid (third-party listings cite ~US$199/month; verify) | Candidate for forecast/actual values |
-| Financial Modeling Prep | Economic calendar with estimate/actual/impact | High | Frequent | Paid tiers (listings conflict: US$29–100+/month; verify) | Candidate |
-| Finnhub | Economic calendar | High | Frequent | Premium-only endpoint | Lower priority |
+Access checks on 2026-11-06 used an honest client identifier (`kronos-trading-research/0.2`); no access controls were
+bypassed. "Live" = verified by the integration tests in `tests/test_integration_live.py` (6 passed, 2 blocked-skipped).
 
-Vendor pricing above comes from third-party listings found on 2026-11-06 (e.g. [Trading Economics API](https://www.tradingeconomics.com/api),
-[FMP listing on Datarade](https://datarade.ai/data-products/economic-calendar-api-350-indicators-financial-modeling-prep),
-[Finance Calendar comparison](https://www.financecalendar.com/?p=2927)) and must be confirmed on vendor pages before purchase.
+| Source | Endpoint(s) | Coverage | XAUUSD relevance | Update frequency | Pricing / rate limits | Reliability | History | Licence | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `pandas_market_calendars` CMEGlobex_Gold | Python library (offline rules) | CME Globex gold sessions, holidays, early closes; future years | High (spot gold follows COMEX closures; brokers may differ) | Library releases | Free / none | Deterministic, no network | Back to 2000s and forward | MIT | **Implemented, verified offline** |
+| Federal Reserve FOMC calendar | HTML `federalreserve.gov/monetarypolicy/fomccalendars.htm` | FOMC meetings (≈5 years incl. next year), SEP flags | Very high | When the Fed updates (dates set ~1 year ahead) | Free / no published limit (polite polling) | Official; layout change → parser fails closed | ~2021→2027 on page | US government work (public domain) | **Implemented, live-verified** |
+| BEA release schedule | HTML `bea.gov/news/schedule` | Upcoming BEA releases (headline GDP, Personal Income & Outlays/PCE) | High | Weekly-ish; lists next ~6 weeks | Free | Official; year inferred from retrieval date | Upcoming only (historical schedule not on page) | Public domain | **Implemented, live-verified** |
+| ECB meeting calendar | HTML `ecb.europa.eu/press/calendars/mgcgc/...` | Governing Council meetings to ~2028 | Medium (EUR; USD drives gold) | When ECB publishes | Free | Official | Future + recent | Reproduction permitted with source | **Implemented, live-verified**; not required by default rules |
+| BLS Public Data API | JSON `api.bls.gov/publicAPI/v2/timeseries/data/{series}` | CPI, payroll *values* (actual/previous) | Very high | Monthly on release | Free; unregistered v2 ≈25 queries/day, registered key higher | Official | Decades | Public domain | **Implemented (values only), live-verified** |
+| BLS release schedule pages | HTML/ICS on `bls.gov/schedule` | CPI, Employment Situation (NFP) dates | Very high | Annual + revisions | Free | Returned HTTP 403 to automated requests | — | Public domain | **Blocked** (not bypassed) |
+| Trading Economics | REST API | Global calendar with forecast/actual/previous, importance | High | Real time | Paid (listings cite ~US$199/month); limits per plan | Commercial SLA | Yes | Commercial licence | Candidate — needs operator decision/key |
+| Financial Modeling Prep | REST API | Economic calendar with estimate/actual/impact | High | Frequent | Paid tiers (listings conflict US$29–100+/month) | Commercial | Yes | Commercial licence | Candidate |
+| Finnhub | REST API | Economic calendar | High | Frequent | Premium-only endpoint | Commercial | Yes | Commercial licence | Lower priority |
+| Operator structured file | JSON via `structured_file_provider` / `load_events_file` | Anything with attribution | — | Manual | — | As good as the source | — | Per source | **Implemented** (stopgap for CPI/NFP schedules) |
 
-**Decision needed (operator):** choose and license a provider for CPI/NFP/GDP schedules with forecast/actual
-values, or supply official schedules as structured files. Until then only FOMC events are automated.
+Vendor pricing is from third-party listings found on 2026-11-06 (e.g. [Trading Economics API](https://www.tradingeconomics.com/api),
+[FMP on Datarade](https://datarade.ai/data-products/economic-calendar-api-350-indicators-financial-modeling-prep),
+[Finance Calendar comparison](https://www.financecalendar.com/?p=2927)) and must be confirmed on vendor pages.
 
-### Safeguards implemented (Section 9.3 — instructions were truncated; interpretation)
-`EventBlackout` (risk-engine `event_guard`) blocks **new entries** around matching events:
-XAUUSD: USD high-impact ±30 min; central-bank (FOMC) −60/+90 min. BTCUSDT: USD high-impact −15/+30 min.
-Unconfirmed-time events block the whole UTC day; stale/missing required calendars fail closed; guard errors fail
-closed. Rules are configuration; AI output cannot alter closures or blackouts (closures are unioned, events come
-only from the provider-attributed store with revision history). Handling of *open* positions around events
-(e.g. flattening) is not implemented and awaits the remainder of the Section 9.3 instructions.
+**Decision needed (operator):** license one vendor for CPI/NFP (and forecast values), or supply official schedules as
+attributed JSON. Until a provider covers `US_CPI`/`US_NFP`, the default XAUUSD guard rejects all new entries
+(BTCUSDT needs `FOMC_DECISION` + `US_CPI`) — this is intentional fail-closed behaviour.
+
+### Ingestion and data model (9.1/9.2)
+`CalendarService.refresh()` runs every provider, checks attribution and series trust, upserts into `EventStore`
+(revision history per event), records refresh time or failure (last good data kept). Each event records name,
+country, currency, scheduled UTC time, impact, previous/forecast/actual when available, provider, retrieval time,
+last update, status, series and reference period. Contradictions (same series, different providers, times
+disagreeing by >1 min within 3 days) reject entries until resolved.
+
+### News-related safeguards (9.3)
+| Safeguard | Implementation | Tests |
+| --- | --- | --- |
+| Block new XAUUSD entries before selected events | `EventBlackout` rules: USD high-impact −30/+30 min; central bank −60/+90 min (configurable `BlackoutRule`) | `test_blackout_window_rules_and_currency_filter`, `test_central_bank_events_get_wider_window_for_gold` |
+| Post-announcement restriction | `after` buffer per rule | same |
+| Spread threshold | `RiskLimits.max_spread` + `MarketHealthMonitor` abnormal-spread multiple | `test_wide_spread_rejected`, `test_health_detects_...abnormal_spread` |
+| Stale calendar rejection | per-provider max age; missing required series | `test_guard_fails_closed_without_cpi_nfp_schedule_provider_then_allows`, `test_stale_or_missing_calendar_fails_closed...` |
+| Valid broker session information | gate requires `TradingCalendar.verification == "broker_verified"` for XAUUSD | `test_gate_requires_market_guard_and_broker_verified_sessions`, `test_calendar_verification_levels` |
+| Buffers tested, not assumed optimal | configurable; research-period sensitivity in the BTC runner (below) | `test_guard_...`, runner report |
+| Existing positions keep protective rules | guards gate *entries* only; replay keeps managing stops | `test_open_position_keeps_stop_management_during_blackout` |
+
+### Cryptocurrency behaviour (9.4)
+BTCUSDT uses a 24/7 calendar (never blocked by TradFi holidays: `test_btc_not_blocked_by_traditional_market_holidays`),
+its own blackout rules (USD high-impact −15/+30 min; requires FOMC and CPI coverage) and its own
+`MarketHealthMonitor` (Binance `exchangeInfo` status, maintenance windows from announcements, spreads, data gaps).
+Geopolitical developments are interpreted by the Grok News Agent (advisory only); exchange maintenance is entered as a
+`VenueWindow` with source and reference (Binance's announcement page is not a structured API).
+
+### Disruption detection (9.5)
+`MarketHealthMonitor` flags/rejects: unknown or stale venue status, suspension/close-only/halt, maintenance windows,
+unverified session-change notices, no or stale market data, gaps in price updates, abnormal spreads. Markets are
+isolated (`test_markets_are_isolated`). Any guard exception becomes a rejection (`test_guard_errors_fail_closed`).
+
+### Grok News Agent (Section 10)
+Contract only (`trading/agents/news.py`); see the integration plan in `docs/ARCHITECTURE.md`. Tests:
+`tests/test_phase2_news_agent.py` (controlled fields rejected, unknown events rejected, non-Grok provider rejected,
+advisory can only add restrictions, blackouts enforced while Grok is unavailable). The research six-agent desk now
+uses the approved roles: scout, news, chart, kronos_analyst, skeptic, coordinator.
 
 ## Limitations
 - BTC fee is assumed (no testnet keys configured); spread model is a 1 bp assumption, not observed order-book data.

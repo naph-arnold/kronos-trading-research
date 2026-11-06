@@ -20,7 +20,7 @@ Updated: 2026-11-06
 - [ ] Phase 2A: XAUUSD strategy research and MT5 demo data. **Code complete and tested with fakes/synthetic data; blocked on an MT5 demo terminal — no XAUUSD market results yet.**
 - [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
 - [ ] Phase 3: Independent automated demo execution adapters.
-- [ ] Phase 4: Kronos, six Grok agents and TradingView integrations.
+- [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
 - [ ] Phase 5: Monitored continuous demo validation.
 
 ---
@@ -228,6 +228,63 @@ breakout +1.11% (31), Kronos-mini −20.15% (247; +3.13% gross), trend+Kronos fi
 Operator provides an MT5 demo terminal (and optionally testnet keys and a calendar provider decision); then run
 Phase 2A discovery/download/backtest and testnet verification. Phase 3 execution adapters remain out of scope until
 reviewed.
+
+---
+
+## Milestone: Phase 2 completion pass — Sections 9–16 (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). Resumed after an interrupted session: verified that
+`trading/marketcal/official.py` and the BEA/ECB/BLS fixtures were complete; fixed the missing
+`EconomicEvent.series/reference_period` fields and a BEA title filter (regional "GDP by County" excluded).
+Code commit `a8259e7`.
+
+### Component status
+Legend: **Completed** (implemented + tests) · **Verified** (also confirmed against live/real data) ·
+**Partially implemented** · **Blocked** (external dependency) · **Not started**.
+
+| Component | Status | Evidence |
+| --- | --- | --- |
+| Phase 1 risk controls (0.5% cap, daily 1.5% halt, 1% aggregate, breakers, duplicates, audit, demo-only) | Verified (tests, CI) | unchanged; all Phase 1 tests pass |
+| MT5 read-only connector, spec discovery, server-time/UTC, history ingestion | Completed (mock MT5 only) | `tests/test_phase2_connectors.py` |
+| MT5 live demo connectivity, broker specs, XAUUSD history | **Blocked** — no MT5 terminal/demo account | integration test skipped: `(-10003, 'IPC initialize failed, MetaTrader 5 x64 not found')` |
+| XAUUSD trading-session calendar (template → CME rules → broker_verified) | Completed; broker verification Blocked | `test_calendar_verification_levels`, CME holiday tests |
+| Four XAUUSD strategies, independently backtestable | Completed (synthetic data only) | `tests/test_phase2_strategies.py`, `tests/test_phase2_runners.py` |
+| XAUUSD out-of-sample reports | **Blocked** (needs MT5 history) | — |
+| Binance public connector + BTCUSDT metadata | Verified (live) | integration: exchangeInfo, bookTicker, server time passed |
+| Binance Spot Testnet public filters | Verified (live; no differences vs production) | integration test passed |
+| Binance testnet account / fee verification | **Blocked** — no testnet keys | integration test skipped |
+| BTC historical data, Kronos vs non-AI comparison, costs, walk-forward | Verified (real data, reproduced twice) | `research/output/phase2_btcusdt.json`, `docs/phase2-research.md` |
+| Official calendar ingestion: FOMC, BEA (GDP/PCE), ECB, BLS values | Verified (live) + recorded fixtures | integration: 4 sources passed; `tests/test_phase2_calendar_service.py` |
+| CPI/NFP release *schedules* | **Blocked** — BLS schedule pages return 403 to automated clients; licensed provider or operator file needed | fail-closed coverage test |
+| CME gold holidays/early closes; broker closure overrides | Completed | `tests/test_phase2_marketcal.py` |
+| Event store (revisions), refresh/failure tracking, contradictions, staleness | Completed | calendar-service tests |
+| News blackouts (configurable, tested, entries only) + buffer sensitivity | Completed | blackout tests; research-period sensitivity table |
+| Market-health monitor (status, maintenance, spreads, gaps, stale data, unverified session changes) | Completed (fed by connectors in Phase 3) | health tests |
+| Gate: verified/recent specs, mandatory guard, broker-verified XAUUSD sessions | Completed | gate tests |
+| Grok News Agent contract; six approved roles in research desk | Completed (contract only) | `tests/test_phase2_news_agent.py`, `tests/test_six_agent_desk.py` |
+| Grok API integration (six agents) | Not started (Phase 4) | — |
+| Execution adapters / order placement | Not started (Phase 3; not authorized) | structural tests forbid order paths |
+
+### Test results (2026-11-06)
+| Run | Environment | Result |
+| --- | --- | --- |
+| Baseline before changes | Python 3.11.18 | 313 passed |
+| Default suite after changes (`-m 'not integration'`) | Python 3.11.18, numpy 1.26.4, pandas 2.2.2 | **355 passed, 8 deselected** |
+| CI fast-checks command list | Python 3.11.18 | **351 passed**; ruff clean |
+| Live integration (`-m integration`) | Python 3.11.18, network | **6 passed, 2 skipped (blocked: MT5 terminal; testnet keys)** — reported separately, not counted above |
+| BTC research rerun | commit `a8259e7` | holdout/walk-forward identical to `9c3f1aa` |
+| Secret / order-path scan of Phase 2 diff | `git diff e54e903..HEAD` | no credentials; order tokens only in tests asserting they are unreachable |
+
+### Remaining external dependencies
+1. MT5 demo terminal + account (and broker commission per lot) — unblocks Phase 2A data, spec verification,
+   `broker_verified` sessions and XAUUSD OOS reports.
+2. Binance Spot Testnet API key/secret (read-only use) — unblocks fee verification.
+3. Economic-calendar provider decision (licensed vendor or operator-maintained official schedule files) for CPI/NFP.
+
+### Next implementation milestone
+Operator supplies (1)–(3); run `research.phase2_xauusd discover/download/backtest`, promote the XAUUSD calendar to
+`broker_verified`, configure the CPI/NFP provider, re-run both pipelines and review. Phase 3 (demo execution adapters)
+only after explicit authorization.
 
 ---
 

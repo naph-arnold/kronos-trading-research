@@ -40,14 +40,39 @@ Binance Spot Testnet for BTC/USDT only initially, with testnet-specific keys and
 6. Realized loss can exceed planned risk due to gaps, partial fills, slippage and stop failures.
 
 ## Market-calendar intelligence (Phase 2)
+```
+providers (official/licensed, attributed)        market-specific rules              enforcement
+ FOMC (federalreserve.gov) ─┐                    XAUUSD: USD high ±30m,             risk.evaluate(event_guard=
+ BEA (GDP, PCE)            ─┤  CalendarService   central bank -60/+90m,              combine_guards(
+ ECB decisions             ─┼─► EventStore ──────► required series FOMC/CPI/NFP/      EventBlackout, MarketHealthMonitor))
+ operator/licensed file    ─┤  (revisions,       GDP/PCE                            + PreTradeGate preconditions
+   (CPI, NFP schedules)    ─┘   refresh/failure, BTCUSDT: USD high -15/+30m,        (verified spec, verified XAUUSD
+ BLS API values (actual/prev)    contradictions) required FOMC/CPI; 24/7 sessions     sessions, mandatory guard)
+ CME gold rules + broker closures ──► TradingCalendar (template → rule_based → broker_verified)
+ venue status / maintenance / quotes ──► MarketHealthMonitor (per market)
+```
 - Deterministic, provider-attributed data only: CME Globex gold holidays/early closes (rule-based library), official
-  Federal Reserve FOMC calendar, operator/broker closure notices, and licensed economic-calendar feeds once chosen.
+  Federal Reserve FOMC calendar, BEA release schedule, ECB meeting calendar, BLS API values, operator/broker closure
+  notices, and licensed economic-calendar feeds once chosen. CPI/NFP *schedules* currently require a licensed provider
+  or operator file (the BLS schedule website refuses automated access); until configured, required-series coverage
+  fails closed.
 - Shared event store with revision history; market-specific rules (XAUUSD and BTCUSDT have separate calendars,
   blackout rules and breakers).
 - Closures from all sources are unioned (most restrictive wins). The risk engine's `event_guard` blocks new entries
   around high-impact events and fails closed when required calendar data is stale. AI agents may read the calendar
   but cannot open a closed market or shorten a blackout.
 - Venue connectors in Phase 2 are read-only (MT5 allowlist proxy; Binance GET-only path allowlist).
+- Crypto is never blocked merely because traditional markets are closed; it has its own blackout rules and health
+  monitor (exchange status, maintenance, spreads, data gaps).
+
+## Grok News Agent integration plan (Phase 4)
+1. Adapter implementing `trading.agents.news.NewsAgentPort` calls the official xAI Grok API with read-only context:
+   upcoming/recent events from `EventStore`, market health flags, and the Kronos forecast summary.
+2. Output must pass `parse_news_assessment` (schema v1; known event IDs only; no controlled fields; freshness).
+3. Assessments go to the Coordinator and the audit log as advisory inputs. Optionally (operator setting) an
+   `avoid_new_entries` recommendation adds a temporary restriction via `advisory_guard`; it can never remove one.
+4. On timeout/invalid output the adapter raises `NewsAgentUnavailable`; verified closures, blackouts and risk limits
+   continue unchanged.
 
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
