@@ -329,6 +329,7 @@ minimum-lot rejections at 3,000 USD; at 10,000/25,000 USD equity every strategy 
 | Default suite, Python 3.11.18 (CI pins) | **371 passed, 8 integration deselected** |
 | Live integration (`-m integration`) | **7 passed** (incl. MT5 demo), **1 skipped** (testnet keys) |
 | ruff | clean |
+| GitHub Actions `fast-checks` (commit `710c71f`) | **pass** — 367 passed, ruff and pip-audit clean ([run 42283392792](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42283392792)) |
 
 ### Remaining requirements
 1. Confirm MetaQuotes-Demo (or the intended broker's) XAUUSD commission per lot; re-run with the verified value.
