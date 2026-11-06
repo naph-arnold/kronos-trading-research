@@ -114,7 +114,7 @@ def run_replay(
     if market is Market.XAUUSD_MT5:
         if session_calendar is None:
             raise ValueError("XAUUSD replay requires a trading session calendar")
-        boundary = DayBoundary.server(session_calendar.server_tz)
+        boundary = DayBoundary.server(session_calendar.server_tz, session_calendar.risk_day_shift)
     else:
         boundary = DayBoundary.utc()
     if max_holding_bars is not None and (type(max_holding_bars) is not int or max_holding_bars < 1):

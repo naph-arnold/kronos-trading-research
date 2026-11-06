@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "name": "phase2a-xauusd-m15-metaquotes-demo",
+  "dataset": {"csv": "data/raw/mt5_xauusd_15m.csv"},
+  "specification": "data/processed/mt5_xauusd_discovery.json",
+  "server_tz": "eet_eu",
+  "broker_closures": null,
+  "events_file": "data/processed/fomc_events.json",
+  "accept_calendar_differences": true,
+  "calendar_note": "Backtest uses NY market hours + CME holidays; broker bars are ground truth for availability. Differences are categorized in docs/phase2-research.md.",
+  "holdout_fraction": 0.2,
+  "walk_forward": {"train_bars": 17280, "test_bars": 5760, "min_train_trades": 10},
+  "warmup_bars": 1200,
+  "initial_equity": "3000",
+  "commission_scenarios": ["0", "7"],
+  "commission_note": "MT5 does not expose commission; 0 = primary scenario (MetaQuotes-Demo is spread-only per observed symbol data, unconfirmed), 7 USD/lot round trip = typical ECN sensitivity.",
+  "costs": {"min_spread": "0.15", "slippage_allowance": "0.10",
+            "note": "Per-bar MT5 spread (bar minimum) floored at 0.15 USD; live spread observed 0.13 USD on 2026-11-06."},
+  "risk": {"risk_fraction": "0.005", "max_spread": "1.00"},
+  "strategies": {
+    "goldpilot_v1": {"strategy": "goldpilot", "grid": {"adx_min": [20, 25], "atr_stop_mult": [1.0, 1.5]}},
+    "order_block_retest": {"strategy": "orderblock", "grid": {"impulse_atr_mult": [1.5, 2.0], "stop_buffer_atr": [0.1, 0.25]}},
+    "liquidity_sweep_mss": {"strategy": "sweep", "grid": {"mss_window_bars": [8, 16], "stop_buffer_atr": [0.1, 0.2]}},
+    "orb_london": {"strategy": "orb", "fixed": {"session": "london"}, "grid": {"range_minutes": [15, 30], "stop_at": ["mid", "opposite"]}, "max_holding_bars": 16},
+    "orb_newyork": {"strategy": "orb", "fixed": {"session": "newyork"}, "grid": {"range_minutes": [15, 30], "stop_at": ["mid", "opposite"]}, "max_holding_bars": 16}
+  }
+}

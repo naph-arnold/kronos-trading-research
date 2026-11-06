@@ -74,6 +74,10 @@ class FakeMt5:
     def order_calc_margin(self, order_type, name, volume, price):
         return 2650.0
 
+    def order_calc_profit(self, order_type, name, volume, price_open, price_close):
+        contract = (self.info or {}).get("trade_contract_size", 100.0)
+        return (price_close - price_open) * volume * contract
+
     def copy_rates_range(self, name, timeframe, start, end):
         self.calls.append(("copy_rates_range", start, end))
         return self.rates
@@ -283,3 +287,27 @@ def test_filter_comparison_and_trading_status():
     diffs = compare_filters(public, halted)
     assert any(d.startswith("status") for d in diffs)
     assert any("BREAK" in p for p in halted.problems)
+
+
+def test_misreported_tick_value_resolved_conservatively_from_terminal_pnl():
+    """Mirrors MetaQuotes-Demo XAUUSD (2026-11-06): trade_tick_value 0.1 but 1 lot x 1.00 = 100 USD."""
+    info = {**FULL_INFO, "trade_tick_value": 0.1, "trade_tick_value_loss": 0.1, "trade_calc_mode": 4}
+    conn, _ = connect(FakeMt5(symbol_info=info, tick=Tick(0, 1, 4075.47, 4075.60)))
+    discovery = conn.symbol_specification("XAUUSD")
+    check = discovery.fields["tick_value_check"]
+    assert not check["consistent"] and check["used"] == pytest.approx(1.0)
+    assert check["sources"]["reported_tick_value_loss"] == 0.1
+    assert discovery.to_instrument_spec().tick_value_loss == D("1.0")
+
+
+def test_commission_assumption_only_when_commission_is_the_sole_gap():
+    conn, _ = connect(FakeMt5(symbol_info=FULL_INFO, tick=Tick(0, 1, 2650.0, 2650.18)), commission=None)
+    discovery = conn.symbol_specification("XAUUSD")
+    with pytest.raises(ValidationError):
+        discovery.to_instrument_spec()
+    spec = discovery.to_instrument_spec(commission_assumption=D("7"))
+    assert spec.commission_per_lot_round_trip == D("7") and not discovery.verified
+    restricted = FakeMt5(symbol_info={**FULL_INFO, "trade_mode": 3}, tick=Tick(0, 1, 2650.0, 2650.18))
+    conn2, _ = connect(restricted, commission=None)
+    with pytest.raises(ValidationError):
+        conn2.symbol_specification("XAUUSD").to_instrument_spec(commission_assumption=D("0"))

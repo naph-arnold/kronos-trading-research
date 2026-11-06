@@ -85,17 +85,26 @@ class SpecDiscovery:
     def verified(self) -> bool:
         return not self.missing and not self.problems
 
-    def to_instrument_spec(self) -> Mt5InstrumentSpec:
-        """Only a fully verified discovery may become a risk-engine instrument spec."""
-        if not self.verified:
+    def to_instrument_spec(self, *, commission_assumption: Decimal | None = None) -> Mt5InstrumentSpec:
+        """Only a fully verified discovery may become a risk-engine instrument spec.
+
+        Research exception: if the *only* missing item is the commission (MT5 does not expose it),
+        an explicit `commission_assumption` may be supplied. The discovery stays unverified, so any
+        result built on it must be classified experimental."""
+        commission_only = (self.missing and all(m.startswith("commission_per_lot_round_trip") for m in self.missing)
+                           and not self.problems)
+        if not self.verified and not (commission_only and commission_assumption is not None):
             raise ValidationError(f"Broker specification unverified: missing={self.missing} problems={self.problems}")
-        f = self.fields
+        f = dict(self.fields)
+        if f.get("commission_per_lot_round_trip") is None:
+            f["commission_per_lot_round_trip"] = commission_assumption
         spec = Mt5InstrumentSpec(
             symbol="XAUUSD", broker_symbol=self.symbol, account_currency=f["account_currency"],
             contract_size=to_decimal(f["contract_size"], "contract_size", positive=True),
             point=to_decimal(f["point"], "point", positive=True),
             tick_size=to_decimal(f["tick_size"], "tick_size", positive=True),
-            tick_value_loss=to_decimal(f["tick_value_loss"], "tick_value_loss", positive=True),
+            tick_value_loss=to_decimal(f.get("tick_value_loss_used", f["tick_value_loss"]), "tick_value_loss",
+                                       positive=True),
             volume_min=to_decimal(f["volume_min"], "volume_min", positive=True),
             volume_max=to_decimal(f["volume_max"], "volume_max", positive=True),
             volume_step=to_decimal(f["volume_step"], "volume_step", positive=True),
@@ -242,6 +251,26 @@ class Mt5ReadOnlyConnector:
             margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, name, 1.0, ask)
         if not margin:
             missing.append("margin_per_lot")
+        # Cross-check the reported loss tick value against the terminal's own P&L engine
+        # (order_calc_profit) and contract_size x tick_size. Brokers can misreport tick values
+        # (e.g. CFD calc modes); sizing must use the value matching actual P&L. If sources disagree,
+        # use the LARGEST loss per tick (smallest position = conservative) and record the discrepancy.
+        tick_check = {}
+        tick_size, reported_loss = info.get("trade_tick_size"), info.get("trade_tick_value_loss")
+        if ask and tick_size and reported_loss:
+            ticks = 1000  # measure over a larger move to avoid float noise, then per tick
+            calc = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, name, 1.0, ask, ask - ticks * tick_size)
+            implied = (info.get("trade_contract_size") or 0) * tick_size
+            candidates = {"reported_tick_value_loss": round(float(reported_loss), 8)}
+            if calc is not None:
+                candidates["order_calc_profit"] = round(abs(float(calc)) / ticks, 8)
+            if implied:
+                candidates["contract_size_x_tick_size"] = round(float(implied), 8)
+            used = max(candidates.values())
+            agree = max(candidates.values()) - min(candidates.values()) <= 0.01 * used
+            tick_check = {"sources": candidates, "consistent": agree, "used": used}
+            if calc is None:
+                missing.append("order_calc_profit cross-check")
         trade_mode = info.get("trade_mode")
         fields = {
             "broker_symbol": name,
@@ -269,6 +298,9 @@ class Mt5ReadOnlyConnector:
             "trade_mode": SYMBOL_TRADE_MODES.get(trade_mode, f"unknown:{trade_mode}"),
             "margin_per_lot": margin,
             "commission_per_lot_round_trip": self._commission,
+            "trade_calc_mode": info.get("trade_calc_mode"),
+            "tick_value_check": tick_check,
+            "tick_value_loss_used": tick_check.get("used", info.get("trade_tick_value_loss")),
             "server": account.get("server"),
             "company": account.get("company"),
         }
@@ -310,20 +342,32 @@ class Mt5ReadOnlyConnector:
             raise ValidationError(f"Stale quote: last tick {now - moment} ago (market closed or feed stalled)")
         return Quote.create(symbol="XAUUSD", bid=tick["bid"], ask=tick["ask"], time=moment)
 
-    def history(self, name: str, interval: str, start: datetime, end: datetime) -> list[Mt5Bar]:
+    def history(self, name: str, interval: str, start: datetime, end: datetime, *,
+                chunk_days: int = 30) -> list[Mt5Bar]:
         """Closed bars in [start, end) UTC, converted from server time. Any ambiguous or
         unconvertible server timestamp rejects the whole request (fail closed)."""
         mt5 = self._require()
         if interval not in TIMEFRAMES:
             raise ValueError(f"Unsupported interval {interval}")
-        # MT5 interprets request bounds on the same (server wall time) scale as bar times.
-        server_start = self.server_tz.to_server(start).replace(tzinfo=timezone.utc)
-        server_end = self.server_tz.to_server(end).replace(tzinfo=timezone.utc)
-        rates = mt5.copy_rates_range(name, getattr(mt5, TIMEFRAMES[interval]), server_start, server_end)
-        if rates is None:
-            raise Mt5Unavailable(f"copy_rates_range failed: {mt5.last_error()}")
+        mt5.symbol_select(name, True)  # history requests fail with "Invalid params" for unselected symbols
+        # MT5 interprets request bounds on the same (server wall time) scale as bar times. Request in
+        # chunks so a long range never exceeds the terminal's max-bars limit.
+        rows, seen, cursor = [], set(), start
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=chunk_days), end)
+            server_start = self.server_tz.to_server(cursor).replace(tzinfo=timezone.utc)
+            server_end = self.server_tz.to_server(chunk_end).replace(tzinfo=timezone.utc)
+            rates = mt5.copy_rates_range(name, getattr(mt5, TIMEFRAMES[interval]), server_start, server_end)
+            if rates is None:
+                raise Mt5Unavailable(f"copy_rates_range failed: {mt5.last_error()}")
+            for row in rates:
+                if int(row["time"]) not in seen:
+                    seen.add(int(row["time"]))
+                    rows.append(row)
+            cursor = chunk_end
+        rows.sort(key=lambda r: int(r["time"]))
         out = []
-        for row in rates:
+        for row in rows:
             record = {k: row[k] for k in ("time", "open", "high", "low", "close", "tick_volume", "spread")}
             utc = self.server_tz.server_epoch_to_utc(int(record["time"]))
             bar = Bar.create(symbol="XAUUSD", interval=interval, open_time=utc, open=float(record["open"]),

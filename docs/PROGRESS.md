@@ -17,7 +17,7 @@ Updated: 2026-11-06
 ## Technical implementation
 - [x] Phase 0: Inventory existing repository and confirm actual baseline and tests (2026-11-06, see below).
 - [x] Phase 1: Shared schema, risk engine, test suite and data validation — implemented and verified locally on Python 3.11 (CI pins) and 3.14; pull request open for review (see milestones below). Not merged.
-- [ ] Phase 2A: XAUUSD strategy research and MT5 demo data. **Code complete and tested with fakes/synthetic data; blocked on an MT5 demo terminal — no XAUUSD market results yet.**
+- [x] Phase 2A: XAUUSD strategy research on MetaQuotes-Demo MT5 data — verified data, broker-verified sessions, walk-forward + holdout results recorded (no robust edge; all experimental). Commission per lot still unverified.
 - [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
 - [ ] Phase 3: Independent automated demo execution adapters.
 - [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
@@ -286,6 +286,56 @@ Legend: **Completed** (implemented + tests) · **Verified** (also confirmed agai
 Operator supplies (1)–(3); run `research.phase2_xauusd discover/download/backtest`, promote the XAUUSD calendar to
 `broker_verified`, configure the CPI/NFP provider, re-run both pipelines and review. Phase 3 (demo execution adapters)
 only after explicit authorization.
+
+---
+
+## Milestone: Phase 2A on MetaQuotes-Demo (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). User connected an MT5 demo terminal (MetaQuotes-Demo). All access
+read-only; **no orders placed, modified or cancelled**; 0.5% risk fraction unchanged. Full details:
+`docs/phase2-research.md` → "Phase 2A results".
+
+### Verified facts
+- Account: MetaQuotes-Demo, trade mode 0 (**demo**), USD, equity 3,000, leverage 1:100.
+- XAUUSD spec: 100 oz, tick 0.01, lots 0.01–100 step 0.01, stops/freeze level 0, full trade mode, SL/TP allowed,
+  margin 4,076.53 USD/lot. **Broker-reported tick value (0.1) contradicts its own P&L engine (1.00 per tick per lot);
+  1.00 used** (conservative; cross-check now automatic in `Mt5ReadOnlyConnector.symbol_specification`).
+- Server time: **EET with EU DST** (`eet_eu`), verified by fresh tick + session structure (304 → 2 off-hours bars).
+  The previous `ny_close` default was wrong for this broker in DST-mismatch weeks.
+- Data: M15 98,250 bars and H1 24,588 bars, 2022-09-01 → 2026-11-06 (UTC), SHA-256 pinned, raw server times kept.
+- Sessions: broker shortened its XAUUSD day in 2026 (closes server 23:00 = 16:00 NY). Broker-verified intersection
+  calendar: 0 missing bars while open over the last 8 weeks.
+
+### Results (holdout 2025-12-30 → 2026-11-06, equity 3,000 USD, commission scenario 0)
+GoldPilot V1 −8.65% (151 trades) · Order Block −2.64% (75) · Liquidity Sweep +0.38% (20) · ORB London −5.35% (81) ·
+ORB New York +1.68% (32). Walk-forward OOS: −9.86%, −10.20%, −7.27%, −8.61%, +6.29%. The two positives come from
+minimum-lot rejections at 3,000 USD; at 10,000/25,000 USD equity every strategy is negative on the holdout.
+**No robust edge; all experimental.** 7 USD/lot commission lowers each result further.
+
+### Component status updates
+| Component | Status |
+| --- | --- |
+| MT5 live demo connectivity, broker specs, XAUUSD history | **Verified** (live, read-only; integration test now passes) |
+| XAUUSD server-time normalization | **Verified** (EET/EU; fresh tick + 98,250-bar structure check) |
+| XAUUSD trading-session calendar | **Verified** for the current broker schedule (`broker_verified`, 8 weeks); historical schedule change documented |
+| Four XAUUSD strategies — out-of-sample reports | **Completed** (real broker data; experimental) |
+| Broker commission per lot | **Blocked** — not exposed by MT5; operator must confirm from broker documentation |
+| Binance testnet account / fee verification | **Blocked** — no testnet keys |
+| CPI/NFP release schedules | **Blocked** — provider decision |
+
+### Test results
+| Run | Result |
+| --- | --- |
+| Default suite, Python 3.11.18 (CI pins) | **371 passed, 8 integration deselected** |
+| Live integration (`-m integration`) | **7 passed** (incl. MT5 demo), **1 skipped** (testnet keys) |
+| ruff | clean |
+
+### Remaining requirements
+1. Confirm MetaQuotes-Demo (or the intended broker's) XAUUSD commission per lot; re-run with the verified value.
+2. Decide whether to keep the 3,000 USD demo balance: at 0.5% risk most XAUUSD setups are rejected by the 0.01-lot
+   minimum (not a reason to raise risk; a reason to prefer tighter-stop designs or a larger demo balance).
+3. Strategy research: none of the four hypotheses is promotable; any redesign must be evaluated on new untouched data.
+4. Testnet keys and CPI/NFP schedule provider (unchanged).
 
 ---
 

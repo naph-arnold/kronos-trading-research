@@ -76,18 +76,105 @@ robust net edge; all remain **experimental**. Nothing here supports Phase 3 prom
 pre-registered (KR-05's 20 bps), not tuned; Kronos was evaluated on the holdout only because forecasts for the
 research period were not generated (walk-forward Kronos evaluation is a possible next step, ~40 min CPU).
 
-## Phase 2A status — XAUUSD (blocked on a demo terminal)
+## Phase 2A results — XAUUSD on MetaQuotes-Demo (MT5, read-only)
 
-**No XAUUSD results exist.** This machine has no MetaTrader 5 terminal (`MetaTrader5.initialize()` →
-`(-10003, 'IPC initialize failed, MetaTrader 5 x64 not found')`). Code paths are verified with a fake MT5 module
-and SYNTHETIC data only; synthetic results are never reported as market evidence. To proceed (operator):
-1. Install MT5, open a **demo** account with an XAUUSD broker, log in (or set `MT5_DEMO_LOGIN/PASSWORD/SERVER`,
-   `MT5_TERMINAL_PATH` in an untracked `.env`).
-2. `python -m research.phase2_xauusd discover --commission-per-lot <from broker docs> --output data/processed/mt5_xauusd_discovery.json`
-   while the market is open (fresh-tick server-time verification).
-3. `python -m research.phase2_xauusd download --start … --end … --output data/raw/mt5_xauusd_m15.csv`; review
-   `calendar_check` in the manifest (bars in closed time / missing bars in open time = broker schedule or offset mismatch).
-4. Copy `research/configs/phase2_xauusd.example.json`, adjust, run `backtest`. The runner refuses unverified specs.
+All data below was retrieved on 2026-11-06 from the user's running MT5 terminal through `Mt5ReadOnlyConnector`
+(allowlist proxy; no order functions reachable). No orders were placed, modified or cancelled.
+
+### Account and terminal (verified)
+| Item | Value |
+| --- | --- |
+| Server / company | MetaQuotes-Demo / MetaQuotes Ltd. |
+| Account trade mode | 0 = **demo** (verified; non-demo would disconnect) |
+| Currency / equity / leverage | USD / 3,000.00 / 1:100 |
+| Terminal build / algo trading | 6306 / disabled in terminal (irrelevant: read-only) |
+
+### XAUUSD contract specification (broker-reported, cross-checked)
+| Field | Value | Status |
+| --- | --- | --- |
+| Symbol / path | `XAUUSD` / `Metals\XAUUSD` | verified (exact name) |
+| Contract size | 100 oz | verified |
+| Tick size / point / digits | 0.01 / 0.01 / 2 | verified |
+| Tick value (loss) | **reported 0.1 USD — inconsistent**; terminal P&L (`order_calc_profit`) and 100 × 0.01 both give **1.00 USD/lot/tick** | resolved conservatively: **1.00 used** (larger loss per tick) |
+| Volume min / max / step | 0.01 / 100 / 0.01 lots | verified |
+| Currencies (base / profit / margin) | XAU / USD / USD | verified |
+| Margin for 1 lot at ~4,075 | 4,076.53 USD (`order_calc_margin`) | verified |
+| Stops level / freeze level | 0 / 0 points | verified |
+| Order types | market, limit, stop, stop-limit, SL, TP, close-by | verified |
+| Filling modes | FOK, IOC | verified |
+| Trade mode | full | verified |
+| Live spread at retrieval | 13 points (0.13 USD), floating | observed |
+| Commission per lot | **unavailable** — MT5 does not expose it | **unverified** → scenarios 0 and 7 USD/lot round trip |
+
+### Server time (verified, with a correction)
+- Fresh-tick check (2026-11-06 18:57 UTC): server offset **UTC+2**.
+- The previous default assumption (NY-close US-DST, `ny_close`) was **wrong for this broker**: converting 98,250 M15
+  bars put 304 bars outside New York gold hours, all in US/EU DST-mismatch weeks. **EET with EU DST (`eet_eu`)** puts
+  only 2 there. All data is converted with `eet_eu`; raw server timestamps are preserved per bar.
+
+### Historical data (verified, SHA-256 pinned; files are git-ignored)
+| Dataset | Bars | UTC range | SHA-256 |
+| --- | --- | --- | --- |
+| M15 (`data/raw/mt5_xauusd_15m.csv`) | 98,250 | 2022-09-01 00:00 → 2026-11-06 18:45 | `46ff39a2e08c…` |
+| H1 (`data/raw/mt5_xauusd_1h.csv`) | 24,588 | 2022-09-01 00:00 → 2026-11-06 18:00 | `0cef2b86ab61…` |
+
+Terminal limits: M15 depth is capped by the terminal's `maxbars` = 100,000 (earliest M15 bar 2022-08-05); H1 history
+exists back to 2009, D1 to 2004. Requests are chunked (30 days) and require the symbol to be selected.
+
+**Observed spreads (M15 bar spread, i.e. the bar's minimum):** median 0.07, p90 0.17, p99 0.33, max 2.81 USD.
+Backtests floor the per-bar spread at 0.15 USD (live spread observed 0.13).
+
+### Timestamp, gap and session validation
+Against New York gold market hours + CME holiday/early-close rules (M15): 49 bars printed while the calendar was
+closed and 760 bars missing while it was open. Categorized:
+- **Bars while closed (49):** broker kept trading briefly after CME holiday early closes (e.g. Labor Day 17:00–18:15 UTC)
+  and in the 2026 March DST-mismatch week. Calendar is stricter than the broker → conservative.
+- **Broker session change in 2026:** from ~April 2026 the broker closes XAUUSD at **server 23:00** (daily break
+  server 23:00–01:00, i.e. 16:00–18:00 New York), one hour earlier than the market close used through 2025
+  (≈20 missing bars/month from April 2026). Detected from data; Section 9.5 "unverified session change".
+- **Broker holidays/early closes:** 24 Dec 2024/2025 from 18:45 UTC, 4 Jul 2025, Memorial/Labor Day afternoons.
+- **Data gaps:** 2025-07-02/04 (~66 bars), 2026-02-26 (~17 bars), 2025-01-07 (~11 bars), 2025-10-23 (~7 bars).
+
+**Broker-verified calendar (for the live gate):** NY market hours + CME holidays, intersected with the broker's
+observed server-time sessions (Mon–Fri 01:00–23:00 EET) over the last 8 weeks. Recent check: **0 bars missing while
+the calendar says open** (3,537 bars), 20 printed while it says closed (the mismatch-week Sunday reopen, stricter is
+allowed) → `broker_verified`. Backtests use NY hours + CME rules; broker bars are the ground truth for availability.
+
+### Risk-engine compatibility (live quote, unchanged 0.5% rule)
+Equity 3,000 USD → budget 15 USD per trade. Loss per lot = (stop distance + 2 × 0.10 slippage + spread) × 100 +
+commission. Examples at ask 4,072.83: stop 3 USD → 0.04 lots (planned 12.80); stop 8 → 0.01 (8.20); stop 15 or 30 →
+**rejected** (0.01 lot would risk 15.20 / 30.20 > 15). The `PreTradeGate` refuses this spec (commission unverified).
+
+### Strategy backtests (M15, equity 3,000 USD, commission scenario 0, spread floor 0.15, slippage 0.10/side)
+Run: `python -m research.phase2_xauusd backtest --config research/configs/phase2_xauusd_metaquotes_demo.json --output
+research/output/phase2_xauusd_metaquotes_demo.json` (config SHA-256 `e3db10bf23c7…`, 32.5 min). Holdout = last 20%
+(19,650 bars, 2025-12-30 → 2026-11-06), untouched until final evaluation; walk-forward on the first 78,600 bars
+(10 windows: ~9-month train, ~3-month test). FOMC blackouts active.
+
+| Strategy | Holdout net % | Gross % | Max DD % | Trades | Win % | PF | Avg R | Min-lot rejections | With 7 USD/lot | WF OOS (profitable windows) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| GoldPilot V1 | **−8.65** | −7.02 | 9.57 | 151 | 30.5 | 0.80 | −0.11 | 579 | −9.78 | −9.86% (4/10) |
+| Order Block Retest | **−2.64** | −1.63 | 6.43 | 75 | 32.0 | 0.87 | −0.07 | 100 | −2.86 | −10.20% (3/10) |
+| Liquidity Sweep + MSS | +0.38 | +0.60 | 1.84 | 20 | 35.0 | 1.07 | +0.03 | 227 | +0.33 | −7.27% (4/10) |
+| ORB London | **−5.35** | −4.47 | 6.44 | 81 | 32.1 | 0.70 | −0.18 | 120 | −6.46 | −8.61% (4/10) |
+| ORB New York | +1.68 | +2.05 | 3.08 | 32 | 50.0 | 1.27 | +0.10 | 163 | +0.87 | +6.29% (5/10) |
+
+**Account-size sensitivity (holdout only, same selected parameters, 0.5% risk unchanged)** —
+`research/phase2_xauusd_equity_sensitivity.py`:
+
+| Strategy | 3,000 USD | 10,000 USD | 25,000 USD |
+| --- | --- | --- | --- |
+| GoldPilot V1 | −8.65% (151 trades) | −9.57% (281) | −9.28% (287) |
+| Order Block Retest | −2.64% (75) | −1.86% (158) | −3.59% (158) |
+| Liquidity Sweep + MSS | +0.38% (20) | −7.55% (137) | −3.55% (140) |
+| ORB London | −5.35% (81) | −12.62% (193) | −12.36% (200) |
+| ORB New York | +1.68% (32) | −1.89% (183) | −2.48% (195) |
+
+**Interpretation.** At 3,000 USD the 0.01-lot minimum rejects most signals (only tight-stop setups survive), which
+produced the two small positive holdout results. When the strategies can take (almost) all their signals, every one
+is negative on the holdout. Walk-forward OOS is negative for four of five; ORB New York is positive (+6.29%) but only
+5/10 windows profitable and negative on the holdout once unconstrained. **No XAUUSD strategy shows a robust edge; all
+remain experimental.** GoldPilot V1's losses concentrate in downtrending high-volatility regimes.
 
 ## Market-calendar intelligence (Section 9)
 

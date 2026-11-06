@@ -117,6 +117,11 @@ def fixed_offset(hours: float, name: str | None = None) -> ServerTimeZone:
 LONDON = ServerTimeZone("europe_london", timedelta(0), timedelta(hours=1), "eu")
 NEW_YORK = ServerTimeZone("america_new_york", timedelta(hours=-5), timedelta(hours=-4), "us")
 
+# EET with EU daylight saving (UTC+2 winter, UTC+3 summer). Verified for MetaQuotes-Demo on 2026-11-06 from
+# 98,250 M15 XAUUSD bars: 2 bars fell outside New York gold market hours under this rule vs 304 under NY_CLOSE
+# (all in the US/EU DST-mismatch weeks). Brokers differ: always verify (fresh tick + session structure).
+EET_EU = ServerTimeZone("eet_eu_dst_utc+2/+3", timedelta(hours=2), timedelta(hours=3), "eu")
+
 # Typical XAUUSD broker convention. Must be confirmed per broker before use.
 NY_CLOSE = ServerTimeZone("ny_close_utc+2/+3", timedelta(hours=2), timedelta(hours=3), "us")
 

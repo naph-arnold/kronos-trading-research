@@ -25,7 +25,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -37,21 +37,23 @@ from trading.state import AccountSnapshot
 class DayBoundary:
     """Maps a UTC instant to a risk day."""
 
-    def __init__(self, name: str, server_tz: ServerTimeZone | None = None):
+    def __init__(self, name: str, server_tz: ServerTimeZone | None = None, shift: timedelta = timedelta(0)):
         self.name = name
         self.server_tz = server_tz
+        self.shift = shift
 
     def trading_day(self, moment: datetime) -> date:
         require_utc(moment, "moment")
-        return (self.server_tz.to_server(moment) if self.server_tz else moment).date()
+        return ((self.server_tz.to_server(moment) if self.server_tz else moment) + self.shift).date()
 
     @classmethod
     def utc(cls) -> "DayBoundary":
         return cls("utc_midnight")
 
     @classmethod
-    def server(cls, tz: ServerTimeZone) -> "DayBoundary":
-        return cls(f"server_midnight:{tz.name}", tz)
+    def server(cls, tz: ServerTimeZone, shift: timedelta = timedelta(0)) -> "DayBoundary":
+        suffix = f"+{shift}" if shift else ""
+        return cls(f"server_midnight:{tz.name}{suffix}", tz, shift)
 
 
 @dataclass(frozen=True)

@@ -137,8 +137,87 @@ def mark_broker_verified(calendar: TradingCalendar, bars: Sequence[Bar], *, offs
     report = compare_with_bars(bars, calendar)
     if not offset_verified:
         raise ValidationError("Server time offset not verified")
-    if len(bars) < min_bars or not report["consistent"]:
+    # The calendar may be STRICTER than the broker (bars printed while it says closed are acceptable:
+    # we merely skip those periods) but never more permissive: any bar missing while it says open fails.
+    if len(bars) < min_bars or report["missing_in_open_time"]:
         raise ValidationError(f"Broker history does not confirm the calendar ({len(bars)} bars, "
-                              f"{len(report['bars_in_closed_time'])} in closed time, "
-                              f"{len(report['missing_in_open_time'])} missing)")
+                              f"{len(report['missing_in_open_time'])} missing while calendar open)")
     return replace(calendar, verification="broker_verified")
+
+
+def broker_xauusd_calendar(bars: Sequence[Bar], *, server_tz, start: date, end: date, weeks: int = 8,
+                           broker_closures: Sequence[BrokerClosure] = ()) -> tuple[TradingCalendar, dict]:
+    """New York market hours + CME holidays/early closes + broker closures, constrained by the broker's
+    sessions observed in its own server time over the last `weeks` (intersection = most restrictive)."""
+    from trading.sessions import XAUUSD_NY_MARKET_HOURS, SessionWindow
+    market, provenance = build_xauusd_calendar(XAUUSD_NY_MARKET_HOURS, start, end, broker_closures)
+    broad = TradingCalendar(symbol="XAUUSD", server_tz=server_tz,
+                            windows=tuple(SessionWindow(d, 0, 1440) for d in range(7)),
+                            open_buffer=timedelta(0), close_buffer=timedelta(0))
+    profile = observed_session_profile(bars, broad, weeks=weeks)
+    broker = profile_calendar(broad, profile)
+    calendar = replace(market, constraints=(broker,), verification="broker_observed")
+    provenance = {**provenance, "broker_profile": {"weeks": weeks, "since": profile["since"], "tz": server_tz.name,
+                                                   "differences_vs_server_day": compare_profile_with_calendar(
+                                                       broker, broad)}}
+    return calendar, provenance
+
+
+def observed_session_profile(bars: Sequence[Bar], calendar: TradingCalendar, *, weeks: int = 8,
+                             min_presence: float = 0.6) -> dict:
+    """Which local-time slots (in `calendar.server_tz`, e.g. New York) actually printed bars in the
+    broker's most recent `weeks` of history. A slot is "observed open" when it printed in at least
+    `min_presence` of the weeks where that weekday traded. Used to detect broker session changes."""
+    if not bars:
+        raise ValidationError("No bars")
+    step = INTERVALS[bars[0].interval]
+    cutoff = bars[-1].open_time - timedelta(weeks=weeks)
+    recent = [b for b in bars if b.open_time >= cutoff]
+    tz = calendar.server_tz
+    seen: dict[int, dict[int, set]] = {}
+    days_traded: dict[int, set] = {}
+    for bar in recent:
+        local = tz.to_server(bar.open_time)
+        minute = local.hour * 60 + local.minute
+        seen.setdefault(local.weekday(), {}).setdefault(minute, set()).add(local.date())
+        days_traded.setdefault(local.weekday(), set()).add(local.date())
+    slot = int(step.total_seconds() // 60)
+    profile = {}
+    for weekday, slots in seen.items():
+        n_days = len(days_traded[weekday])
+        profile[weekday] = sorted(m for m, days in slots.items() if len(days) >= min_presence * n_days)
+    return {"weeks": weeks, "slot_minutes": slot, "tz": tz.name, "since": cutoff.isoformat(), "open_slots": profile}
+
+
+def profile_calendar(base: TradingCalendar, profile: dict) -> TradingCalendar:
+    """Restrict `base` sessions to slots the broker was observed trading (intersection; never widens)."""
+    from trading.sessions import SessionWindow
+    slot = profile["slot_minutes"]
+    windows = []
+    for weekday, minutes in sorted(profile["open_slots"].items()):
+        allowed = [m for m in minutes if any(w.weekday == weekday and w.start_minute <= m < w.end_minute
+                                             for w in base.windows)]
+        start = prev = None
+        for m in allowed + [None]:
+            if m is not None and prev is not None and m == prev + slot:
+                prev = m
+                continue
+            if start is not None:
+                windows.append(SessionWindow(weekday, start, prev + slot))
+            start = prev = m
+    calendar = replace(base, windows=tuple(windows), verification="broker_observed")
+    calendar.validate()
+    return calendar
+
+
+def compare_profile_with_calendar(profile_cal: TradingCalendar, base: TradingCalendar) -> list[str]:
+    """Human-readable session differences (e.g. a broker break longer than the market's)."""
+    diffs = []
+    names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    for weekday in range(7):
+        b = sorted((w.start_minute, w.end_minute) for w in base.windows if w.weekday == weekday)
+        p = sorted((w.start_minute, w.end_minute) for w in profile_cal.windows if w.weekday == weekday)
+        if b != p:
+            fmt = lambda ws: ", ".join(f"{s // 60:02d}:{s % 60:02d}-{e // 60:02d}:{e % 60:02d}" for s, e in ws)  # noqa
+            diffs.append(f"{names[weekday]}: market {fmt(b) or 'closed'} | broker observed {fmt(p) or 'closed'}")
+    return diffs

@@ -31,6 +31,7 @@ Before making changes, read:
 - Calendar data must come from identified, verifiable providers (`trading/marketcal/`): CME gold holiday rules, Federal Reserve, BEA, ECB, BLS API values, operator/licensed structured files. Never invent schedules; closures are unioned; stale, missing or contradictory calendar data rejects new entries.
 - The calendar service and risk engine run without Grok. The News Agent may interpret and recommend, but its output is validated by `trading/agents/news.py` and can never change schedules, closures, stops, risk limits or execution mode.
 - Venue connectors stay read-only until Phase 3 is explicitly authorized (MT5 allowlist proxy; Binance GET-only).
+- Never assume a broker's server time zone, tick value or session hours: verify against a fresh tick, the terminal's own P&L calculation (`order_calc_profit`) and the broker's bar history (MetaQuotes-Demo: EET/EU DST, misreported XAUUSD tick value, 2026 session change).
 - Tests needing live network, a broker terminal or credentials are marked `integration` and are deselected by default; report them separately and never count skips as passes.
 
 ## Current assignment

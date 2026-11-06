@@ -5,6 +5,7 @@ import csv
 import calendar as stdcal
 import hashlib
 import json
+from pathlib import Path
 from argparse import Namespace
 
 import pytest
@@ -75,3 +76,24 @@ def test_tampered_dataset_rejected(tmp_path):
         stream.write("tampered\n")
     with pytest.raises(ValidationError, match="SHA-256"):
         load_mt5_csv(dataset)
+
+
+def test_commission_scenarios_allow_research_run_but_stay_experimental(tmp_path):
+    """MT5 does not expose commission: only an explicit scenario list lets research proceed, and the
+    discovery stays unverified so every strategy is classified experimental."""
+    dataset = write_dataset(tmp_path, xau_m15(3000))
+    path = write_config(tmp_path, dataset, missing=["commission_per_lot_round_trip (not exposed by MT5)"])
+    config = json.loads(path.read_text(encoding="utf-8"))
+    spec_path = Path(config["specification"])
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec["specification"]["fields"]["commission_per_lot_round_trip"] = None
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    with pytest.raises(ValidationError, match="unverified"):
+        cmd_backtest(Namespace(config=str(path)))
+    config["commission_scenarios"] = ["0", "7"]
+    path.write_text(json.dumps(config), encoding="utf-8")
+    report = cmd_backtest(Namespace(config=str(path)))
+    assert report["commission_scenarios"] == ["0", "7"]
+    for item in report["strategies"].values():
+        assert item["classification"].startswith("experimental")
+        assert set(item["holdout_commission_sensitivity"]) == {"7"}
