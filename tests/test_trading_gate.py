@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import timedelta
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -12,7 +13,10 @@ from trading.common import Market
 from trading.config import (ExecutionMode, LiveTradingForbidden, load_demo_environment, verify_binance_endpoint,
                             verify_mt5_demo_account)
 from trading.daily import DailyLossLedger, DayBoundary
+from dataclasses import replace
+
 from trading.gate import PreTradeGate
+from trading.instruments import VerifiedInstrument
 from trading.ledger import SignalLedger
 from trading_helpers import ENV, NOW, XAU_CALENDAR, account, breaker, limits, xau_quote, xau_signal, xau_spec
 
@@ -27,15 +31,24 @@ def daily_ledger(tmp_path):
                            halt_fraction=D("0.015"))
 
 
-def make_gate(tmp_path, ledger=None, audit=None, daily=None):
+VERIFIED_CALENDAR = replace(XAU_CALENDAR, verification="broker_verified")  # test fixture, not broker evidence
+
+
+def no_disruption(now):
+    return None
+
+
+def make_gate(tmp_path, ledger=None, audit=None, daily=None, market_guard=no_disruption, calendar=VERIFIED_CALENDAR):
     return PreTradeGate(environment=ENV, limits=limits(XAU), breaker=breaker(XAU),
                         ledger=ledger or SignalLedger(tmp_path / "ledger.sqlite"),
                         audit=audit or AuditLog(tmp_path / "audit.jsonl"),
-                        daily_ledger=daily or daily_ledger(tmp_path), session_calendar=XAU_CALENDAR)
+                        daily_ledger=daily or daily_ledger(tmp_path), session_calendar=calendar,
+                        market_guard=market_guard)
 
 
 def submit(gate, signal=None, **overrides):
-    kwargs = dict(account=account(XAU), instrument=xau_spec(), quote=xau_quote(), now=NOW)
+    kwargs = dict(account=account(XAU), instrument=VerifiedInstrument(xau_spec(), "test-fixture", NOW, True),
+                  quote=xau_quote(), now=NOW)
     kwargs.update(overrides)
     return gate.evaluate(signal or xau_signal(), **kwargs)
 
@@ -100,10 +113,12 @@ def test_audit_failure_rejects_and_trips_breaker(tmp_path):
 def test_gate_requires_matching_breaker_market(tmp_path):
     with pytest.raises(ValueError):
         PreTradeGate(environment=ENV, limits=limits(XAU), breaker=breaker(Market.BTCUSDT_BINANCE_SPOT),
-                     ledger=SignalLedger(), audit=AuditLog(tmp_path / "a.jsonl"), daily_ledger=daily_ledger(tmp_path))
+                     ledger=SignalLedger(), audit=AuditLog(tmp_path / "a.jsonl"), daily_ledger=daily_ledger(tmp_path),
+                     market_guard=no_disruption)
     with pytest.raises(ValueError):
         PreTradeGate(environment=ENV, limits=limits(XAU, daily_loss_halt_fraction=D("0.02")), breaker=breaker(XAU),
-                     ledger=SignalLedger(), audit=AuditLog(tmp_path / "b.jsonl"), daily_ledger=daily_ledger(tmp_path))
+                     ledger=SignalLedger(), audit=AuditLog(tmp_path / "b.jsonl"), daily_ledger=daily_ledger(tmp_path),
+                     market_guard=no_disruption)
 
 
 # --- Demo-only environment -----------------------------------------------------
@@ -148,13 +163,17 @@ def test_mt5_non_demo_account_modes_rejected(mode):
 
 
 def test_trading_package_contains_no_order_routing():
-    """Phase 1 has no executor; assert no order endpoints or MT5 order calls slipped in."""
-    forbidden = ("order_send", "/api/v3/order", "api.binance.com", "fapi.binance", "sapi/")
-    for path in (ROOT / "trading").glob("*.py"):
+    """No executor before Phase 3: no order endpoints, MT5 order calls, POST/DELETE, or HTTP client libraries."""
+    forbidden = ("order_send", "order_check", "/api/v3/order", "api.binance.com", "fapi.binance", "sapi/",
+                 'method="POST"', 'method="DELETE"', "import requests", "import httpx", "import ccxt")
+    files = sorted((ROOT / "trading").rglob("*.py"))
+    assert any(p.parent.name == "connectors" for p in files)
+    for path in files:
         source = path.read_text(encoding="utf-8")
         ast.parse(source)
         assert not any(token in source for token in forbidden), path
-        assert "import MetaTrader5" not in source and "requests" not in source, path
+        if path.name != "mt5.py" or path.parent.name != "connectors":
+            assert "import MetaTrader5" not in source, path
 
 
 def test_size_is_decimal_not_float(tmp_path):
@@ -191,9 +210,14 @@ def test_no_ai_provider_in_deterministic_decision_path():
     forbidden = ("import openai", "import anthropic", "from openai", "from anthropic", "xai_sdk", "api.x.ai",
                  "from model", "import model", "import torch", "research.six_agent_desk import decide",
                  "research.forecast")
-    for path in (ROOT / "trading").glob("*.py"):
+    for path in (ROOT / "trading").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
+        if path.parent.name == "agents":  # contracts may *name* the Grok provider but never call it
+            assert not any(t in source for t in ("import openai", "import anthropic", "xai_sdk", "urlopen",
+                                                  "import requests", "import httpx")), path
+            continue
         assert not any(token in source for token in forbidden), path
+        assert "trading.agents" not in source, f"{path} must not depend on AI agent contracts"
 
 
 def test_architecture_docs_state_grok_kronos_claude_roles():
@@ -202,3 +226,22 @@ def test_architecture_docs_state_grok_kronos_claude_roles():
     for text in (claude_md, architecture):
         assert "official xai grok api" in text.lower()
         assert "Kronos" in text and "Claude Code" in text
+
+
+@pytest.mark.parametrize("instrument,reason", [
+    (lambda: xau_spec(), "not verified"),
+    (lambda: VerifiedInstrument(xau_spec(), "fixture", NOW, False), "not verified"),
+    (lambda: VerifiedInstrument(xau_spec(), "fixture", NOW - timedelta(days=2), True), "stale"),
+])
+def test_gate_requires_verified_recent_instrument_spec(tmp_path, instrument, reason):
+    decision = submit(make_gate(tmp_path), instrument=instrument())
+    assert not decision.approved and reason in " ".join(decision.reasons)
+
+
+def test_gate_requires_market_guard_and_broker_verified_sessions(tmp_path):
+    missing_guard = submit(make_gate(tmp_path / "a", market_guard=None))
+    assert not missing_guard.approved and "No market-data/calendar guard" in " ".join(missing_guard.reasons)
+    template = submit(make_gate(tmp_path / "b", calendar=XAU_CALENDAR))
+    assert not template.approved and "not verified against the broker" in " ".join(template.reasons)
+    disrupted = submit(make_gate(tmp_path / "c", market_guard=lambda now: "abnormal spread"))
+    assert not disrupted.approved and "abnormal spread" in " ".join(disrupted.reasons)

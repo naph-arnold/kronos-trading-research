@@ -17,10 +17,10 @@ Updated: 2026-11-06
 ## Technical implementation
 - [x] Phase 0: Inventory existing repository and confirm actual baseline and tests (2026-11-06, see below).
 - [x] Phase 1: Shared schema, risk engine, test suite and data validation — implemented and verified locally on Python 3.11 (CI pins) and 3.14; pull request open for review (see milestones below). Not merged.
-- [ ] Phase 2A: XAUUSD strategy research and MT5 demo data.
-- [ ] Phase 2B: BTC/USDT strategy research and Binance Spot Testnet data.
+- [x] Phase 2A: XAUUSD strategy research on MetaQuotes-Demo MT5 data — verified data, broker-verified sessions, walk-forward + holdout results recorded (no robust edge; all experimental). Commission per lot still unverified.
+- [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
 - [ ] Phase 3: Independent automated demo execution adapters.
-- [ ] Phase 4: Kronos, six Grok agents and TradingView integrations.
+- [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
 - [ ] Phase 5: Monitored continuous demo validation.
 
 ---
@@ -177,6 +177,213 @@ Phase 2A/2B data foundations (parallel, no AI dependence): MT5 demo connection r
 server-offset verification, UTC history with `validate_session_bars`) for XAUUSD; Binance Spot Testnet read-only
 metadata/filters and balances for BTCUSDT; then baseline non-AI strategy backtests through `trading.replay` with
 out-of-sample splits and net costs. No execution adapters (Phase 3) until reviewed.
+
+---
+
+## Milestone: Phase 2 — market research pipelines (2026-11-06)
+
+Branch: `feat/phase2-market-research`, stacked on `feat/phase1-risk-foundations` (PR #10, itself stacked on #9).
+Neither #9 nor #10 was merged at branch time. Code commit `9c3f1aa`, docs `d8a24b2`. Pull request:
+[#11](https://github.com/naph-arnold/kronos-trading-research/pull/11) (open, not merged). Details and full tables: `docs/phase2-research.md`.
+
+### Added
+- Read-only connectors: `trading/connectors/mt5.py` (allowlist proxy, demo enforcement, symbol/spec discovery with
+  verification status, server-time verification, UTC history with raw server times and spreads) and
+  `trading/connectors/binance.py` (public data + Spot Testnet signed GET account; path allowlist; no credentials logged).
+- Strategies: XAUUSD GoldPilot V1, Order Block Retest, Liquidity Sweep + MSS, Opening Range Breakout (London/NY);
+  BTCUSDT Kronos forecast, trend following, breakout, Kronos-filtered trend, buy-and-hold benchmark. No prior
+  GoldPilot implementation existed in the repository or its history.
+- `trading/indicators.py`, `trading/evaluation.py`, replay extensions (HistoryView, spread model, time exits,
+  gross/cost/net, exposure, event guard), EU DST rule and London/New York zones in `trading/clock.py`.
+- Market calendar (`trading/marketcal/`): CME gold holidays/early closes, broker closures, official FOMC parser,
+  revisioned event store, deterministic news blackouts wired into `trading.risk.evaluate`.
+- Runners/configs: `research/phase2_btcusdt.py`, `research/phase2_xauusd.py`, `research/configs/`.
+- `requirements-trading.txt` (pandas_market_calendars 5.5.0, MetaTrader5 5.0.6231 on Windows); CI installs/audits it.
+
+### Verified results
+| Check | Environment | Result |
+| --- | --- | --- |
+| Full fast suite | Python 3.11.18, numpy 1.26.4, pandas 2.2.2 | **313 passed** |
+| Full fast suite | Python 3.14.3, pandas 3.1.1 | **313 passed** |
+| CI fast-checks command list | Python 3.11.18 | **309 passed**; ruff clean |
+| `pip-audit -r requirements-trading.txt` | 3.11 | No known vulnerabilities |
+| BTCUSDT research run (twice, identical) | 3.11, commit `9c3f1aa` | See table below |
+| GitHub Actions `fast-checks` (manual dispatch) | ubuntu-latest, Python 3.11 | **pass** — 309 passed, ruff clean, pip-audit clean for both requirement files ([run 42264691412](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42264691412)) |
+
+BTCUSDT holdout (2026-05-24 → 2026-11-06, 3,964 h; fee assumed 0.10%/side): trend +0.78% (12 trades),
+breakout +1.11% (31), Kronos-mini −20.15% (247; +3.13% gross), trend+Kronos filter −0.18% (7), buy-and-hold −1.13%
+(DD 25%). Walk-forward OOS (12 windows): trend −6.33%, breakout −15.45%. Kronos-mini holdout MAE 213.9 vs naive
+187.9. **No robust edge; all strategies experimental.**
+
+### Blockers / decisions needed
+- **MT5:** no terminal on this machine; Phase 2A data, spec verification and XAUUSD backtests require an MT5 demo
+  account (steps in `docs/phase2-research.md`). Broker commission must be supplied from broker documentation.
+- **Binance testnet keys:** absent; fee rate is assumed until `/api/v3/account` commission rates are read.
+- **Economic calendar provider:** CPI/NFP/GDP schedules and forecast/actual values need a licensed provider or
+  operator-supplied files (BLS returned HTTP 403 to automated requests; not bypassed).
+- **Instructions truncated** at Section 9.3; blackout behaviour implemented as interpreted; handling of open
+  positions around events and any later sections still to be confirmed.
+
+### Next step
+Operator provides an MT5 demo terminal (and optionally testnet keys and a calendar provider decision); then run
+Phase 2A discovery/download/backtest and testnet verification. Phase 3 execution adapters remain out of scope until
+reviewed.
+
+---
+
+## Milestone: Phase 2 completion pass — Sections 9–16 (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). Resumed after an interrupted session: verified that
+`trading/marketcal/official.py` and the BEA/ECB/BLS fixtures were complete; fixed the missing
+`EconomicEvent.series/reference_period` fields and a BEA title filter (regional "GDP by County" excluded).
+Code commit `a8259e7`.
+
+### Component status
+Legend: **Completed** (implemented + tests) · **Verified** (also confirmed against live/real data) ·
+**Partially implemented** · **Blocked** (external dependency) · **Not started**.
+
+| Component | Status | Evidence |
+| --- | --- | --- |
+| Phase 1 risk controls (0.5% cap, daily 1.5% halt, 1% aggregate, breakers, duplicates, audit, demo-only) | Verified (tests, CI) | unchanged; all Phase 1 tests pass |
+| MT5 read-only connector, spec discovery, server-time/UTC, history ingestion | Completed (mock MT5 only) | `tests/test_phase2_connectors.py` |
+| MT5 live demo connectivity, broker specs, XAUUSD history | **Blocked** — no MT5 terminal/demo account | integration test skipped: `(-10003, 'IPC initialize failed, MetaTrader 5 x64 not found')` |
+| XAUUSD trading-session calendar (template → CME rules → broker_verified) | Completed; broker verification Blocked | `test_calendar_verification_levels`, CME holiday tests |
+| Four XAUUSD strategies, independently backtestable | Completed (synthetic data only) | `tests/test_phase2_strategies.py`, `tests/test_phase2_runners.py` |
+| XAUUSD out-of-sample reports | **Blocked** (needs MT5 history) | — |
+| Binance public connector + BTCUSDT metadata | Verified (live) | integration: exchangeInfo, bookTicker, server time passed |
+| Binance Spot Testnet public filters | Verified (live; no differences vs production) | integration test passed |
+| Binance testnet account / fee verification | **Blocked** — no testnet keys | integration test skipped |
+| BTC historical data, Kronos vs non-AI comparison, costs, walk-forward | Verified (real data, reproduced twice) | `research/output/phase2_btcusdt.json`, `docs/phase2-research.md` |
+| Official calendar ingestion: FOMC, BEA (GDP/PCE), ECB, BLS values | Verified (live) + recorded fixtures | integration: 4 sources passed; `tests/test_phase2_calendar_service.py` |
+| CPI/NFP release *schedules* | **Blocked** — BLS schedule pages return 403 to automated clients; licensed provider or operator file needed | fail-closed coverage test |
+| CME gold holidays/early closes; broker closure overrides | Completed | `tests/test_phase2_marketcal.py` |
+| Event store (revisions), refresh/failure tracking, contradictions, staleness | Completed | calendar-service tests |
+| News blackouts (configurable, tested, entries only) + buffer sensitivity | Completed | blackout tests; research-period sensitivity table |
+| Market-health monitor (status, maintenance, spreads, gaps, stale data, unverified session changes) | Completed (fed by connectors in Phase 3) | health tests |
+| Gate: verified/recent specs, mandatory guard, broker-verified XAUUSD sessions | Completed | gate tests |
+| Grok News Agent contract; six approved roles in research desk | Completed (contract only) | `tests/test_phase2_news_agent.py`, `tests/test_six_agent_desk.py` |
+| Grok API integration (six agents) | Not started (Phase 4) | — |
+| Execution adapters / order placement | Not started (Phase 3; not authorized) | structural tests forbid order paths |
+
+### Test results (2026-11-06)
+| Run | Environment | Result |
+| --- | --- | --- |
+| Baseline before changes | Python 3.11.18 | 313 passed |
+| Default suite after changes (`-m 'not integration'`) | Python 3.11.18, numpy 1.26.4, pandas 2.2.2 | **355 passed, 8 deselected** |
+| CI fast-checks command list | Python 3.11.18 | **351 passed**; ruff clean |
+| Live integration (`-m integration`) | Python 3.11.18, network | **6 passed, 2 skipped (blocked: MT5 terminal; testnet keys)** — reported separately, not counted above |
+| BTC research rerun | commit `a8259e7` | holdout/walk-forward identical to `9c3f1aa` |
+| Secret / order-path scan of Phase 2 diff | `git diff e54e903..HEAD` | no credentials; order tokens only in tests asserting they are unreachable |
+| GitHub Actions `fast-checks` (manual dispatch) | ubuntu-latest, Python 3.11 | **pass** — 351 passed, ruff clean, pip-audit clean ([run 42271518334](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42271518334)) |
+
+### Remaining external dependencies
+1. MT5 demo terminal + account (and broker commission per lot) — unblocks Phase 2A data, spec verification,
+   `broker_verified` sessions and XAUUSD OOS reports.
+2. Binance Spot Testnet API key/secret (read-only use) — unblocks fee verification.
+3. Economic-calendar provider decision (licensed vendor or operator-maintained official schedule files) for CPI/NFP.
+
+### Next implementation milestone
+Operator supplies (1)–(3); run `research.phase2_xauusd discover/download/backtest`, promote the XAUUSD calendar to
+`broker_verified`, configure the CPI/NFP provider, re-run both pipelines and review. Phase 3 (demo execution adapters)
+only after explicit authorization.
+
+---
+
+## Milestone: Phase 2A on MetaQuotes-Demo (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). User connected an MT5 demo terminal (MetaQuotes-Demo). All access
+read-only; **no orders placed, modified or cancelled**; 0.5% risk fraction unchanged. Full details:
+`docs/phase2-research.md` → "Phase 2A results".
+
+### Verified facts
+- Account: MetaQuotes-Demo, trade mode 0 (**demo**), USD, equity 3,000, leverage 1:100.
+- XAUUSD spec: 100 oz, tick 0.01, lots 0.01–100 step 0.01, stops/freeze level 0, full trade mode, SL/TP allowed,
+  margin 4,076.53 USD/lot. **Broker-reported tick value (0.1) contradicts its own P&L engine (1.00 per tick per lot);
+  1.00 used** (conservative; cross-check now automatic in `Mt5ReadOnlyConnector.symbol_specification`).
+- Server time: **EET with EU DST** (`eet_eu`), verified by fresh tick + session structure (304 → 2 off-hours bars).
+  The previous `ny_close` default was wrong for this broker in DST-mismatch weeks.
+- Data: M15 98,250 bars and H1 24,588 bars, 2022-09-01 → 2026-11-06 (UTC), SHA-256 pinned, raw server times kept.
+- Sessions: broker shortened its XAUUSD day in 2026 (closes server 23:00 = 16:00 NY). Broker-verified intersection
+  calendar: 0 missing bars while open over the last 8 weeks.
+
+### Results (holdout 2025-12-30 → 2026-11-06, equity 3,000 USD, commission scenario 0)
+GoldPilot V1 −8.65% (151 trades) · Order Block −2.64% (75) · Liquidity Sweep +0.38% (20) · ORB London −5.35% (81) ·
+ORB New York +1.68% (32). Walk-forward OOS: −9.86%, −10.20%, −7.27%, −8.61%, +6.29%. The two positives come from
+minimum-lot rejections at 3,000 USD; at 10,000/25,000 USD equity every strategy is negative on the holdout.
+**No robust edge; all experimental.** 7 USD/lot commission lowers each result further.
+
+### Component status updates
+| Component | Status |
+| --- | --- |
+| MT5 live demo connectivity, broker specs, XAUUSD history | **Verified** (live, read-only; integration test now passes) |
+| XAUUSD server-time normalization | **Verified** (EET/EU; fresh tick + 98,250-bar structure check) |
+| XAUUSD trading-session calendar | **Verified** for the current broker schedule (`broker_verified`, 8 weeks); historical schedule change documented |
+| Four XAUUSD strategies — out-of-sample reports | **Completed** (real broker data; experimental) |
+| Broker commission per lot | **Blocked** — not exposed by MT5; operator must confirm from broker documentation |
+| Binance testnet account / fee verification | **Blocked** — no testnet keys |
+| CPI/NFP release schedules | **Blocked** — provider decision |
+
+### Test results
+| Run | Result |
+| --- | --- |
+| Default suite, Python 3.11.18 (CI pins) | **371 passed, 8 integration deselected** |
+| Live integration (`-m integration`) | **7 passed** (incl. MT5 demo), **1 skipped** (testnet keys) |
+| ruff | clean |
+| GitHub Actions `fast-checks` (commit `710c71f`) | **pass** — 367 passed, ruff and pip-audit clean ([run 42283392792](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42283392792)) |
+
+### Remaining requirements
+1. Confirm MetaQuotes-Demo (or the intended broker's) XAUUSD commission per lot; re-run with the verified value.
+2. Decide whether to keep the 3,000 USD demo balance: at 0.5% risk most XAUUSD setups are rejected by the 0.01-lot
+   minimum (not a reason to raise risk; a reason to prefer tighter-stop designs or a larger demo balance).
+3. Strategy research: none of the four hypotheses is promotable; any redesign must be evaluated on new untouched data.
+4. Testnet keys and CPI/NFP schedule provider (unchanged).
+
+---
+
+## Milestone: Phase 2C — XAUUSD strategy validation and robustness (2026-11-06)
+
+Branch `feat/phase2-market-research` (PR #11). Research only; no orders; strategy rules, Phase 2A parameters and the
+0.5% risk fraction unchanged. Full report: `docs/phase2c-robustness.md`.
+
+### What was done
+- Training-only analyses (2022-09 → 2025-12, 78,600 M15 bars) via `research/phase2c_robustness.py`: diagnostics at
+  3,000 and 25,000 USD, 72-configuration parameter sensitivity, 80 random-entry baseline runs (unbiased and
+  long-bias-matched), H1 EMA-cross baseline, cost stress, minimum-lot eligibility, regime/session/volatility/year/side
+  breakdowns, bootstrap confidence intervals.
+- Verified costs from the terminal (read-only): 2.1 M ticks (spread p50 0.17, mean 0.24 USD), swap (long −12.6,
+  short −4.6 USD/lot/night, Wednesday ×3). Commission remains **unverified**.
+- Checked for smaller gold contracts (none on MetaQuotes-Demo) and older M15 history (none: terminal `maxbars`).
+- Pre-registered a shadow-mode forward test: `research/forward_test/phase2c_xauusd_preregistration.json`.
+
+### Findings (training, 25,000 USD, base costs)
+| Strategy | Net % | Gross % | Mean R | Beats matched random | Configs profitable | Recommendation |
+| --- | --- | --- | --- | --- | --- | --- |
+| GoldPilot V1 | −15.1 | +18.6 | −0.028 | 12/20 | 3/18 | No forward test |
+| Order Block Retest | −6.2 | +17.4 | −0.017 | 13/20 | 0/9 | No forward test |
+| Liquidity Sweep + MSS | −7.9 | +5.5 | −0.023 | 14/20 | 1/9 | No forward test |
+| ORB London | −21.1 | +1.0 | −0.061 | 18/20 | 0/18 | Retire |
+| ORB New York | −5.5 | +9.5 | −0.013 | 20/20 | 1/18 | **Shadow forward test** |
+Main failure modes: costs > gross edge at tight stops; gross profits largely long bias in the 2022–2025 bull market.
+Minimum lot: 3,000 USD allows stops ≤ 14.67 USD → only 8–43% of 2026 signals eligible; 10,000 USD → 81–98%.
+
+### Component status
+| Component | Status |
+| --- | --- |
+| Phase 2C robustness research (training-only) | **Completed** (real broker data) |
+| XAUUSD spread and swap costs | **Verified** (tick sample / symbol_info) |
+| XAUUSD commission and slippage | **Estimated** (scenarios); commission verification **Blocked** (broker docs or authorized demo trade) |
+| Forward test (ORB New York + controls) | **Not started** — pre-registered; needs a read-only shadow runner |
+| Execution / order placement | Not started (not authorized) |
+
+### Tests
+`python -m pytest -q tests --ignore=tests/test_kronos_regression.py` → **378 passed, 8 integration deselected**
+(Python 3.11.18); ruff clean. GitHub Actions `fast-checks` on `41fa5d6`: **374 passed**, ruff and pip-audit clean
+([run 42289799965](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42289799965)).
+
+### Next step
+Build the read-only shadow forward-test runner (live closed M15 bars, simulated fills from live ticks, no order
+functions), switch the demo balance to 10,000 USD if possible, confirm commission, then start the pre-registered
+forward window. No execution adapters until explicitly authorized.
 
 ---
 

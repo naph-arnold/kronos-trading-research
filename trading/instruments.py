@@ -7,6 +7,7 @@ account commission) — never guessed. Missing values fail closed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from trading.common import Market, ValidationError, is_multiple
@@ -137,3 +138,14 @@ class BinanceSpotSpec:
 
 
 InstrumentSpec = Mt5InstrumentSpec | BinanceSpotSpec
+
+
+@dataclass(frozen=True)
+class VerifiedInstrument:
+    """A venue specification plus its provenance. The pre-trade gate only sizes with
+    specs that were verified against the broker/exchange and are recent."""
+
+    spec: InstrumentSpec
+    source: str  # e.g. "mt5.symbol_info", "binance_spot_testnet.exchangeInfo+account"
+    retrieved_at: datetime
+    verified: bool

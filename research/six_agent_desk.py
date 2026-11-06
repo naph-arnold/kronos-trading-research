@@ -14,7 +14,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROLES = ("scout", "news", "chart", "strategist", "risk", "skeptic")
+# Approved six Grok reasoning roles (docs/ARCHITECTURE.md). Position sizing/risk is deterministic code,
+# not an AI role, so the former "strategist"/"risk" roles were replaced by "kronos_analyst"/"coordinator".
+ROLES = ("scout", "news", "chart", "kronos_analyst", "skeptic", "coordinator")
+AI_PROVIDER = "xAI Grok API (official, https://api.x.ai)"
 VERDICTS = ("approve", "reject", "abstain")
 
 

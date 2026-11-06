@@ -110,6 +110,7 @@ def evaluate(
     now: datetime,
     duplicate_check=None,
     session_calendar: TradingCalendar | None = None,
+    event_guard=None,
 ) -> RiskDecision:
     """Return an approved size or a rejection with every reason found. Never raises."""
     base = RiskDecision(
@@ -119,13 +120,13 @@ def evaluate(
     )
     try:
         return _evaluate(base, signal, account, instrument, quote, limits, environment, breaker, now,
-                         duplicate_check, session_calendar)
+                         duplicate_check, session_calendar, event_guard)
     except Exception as exc:  # fail closed on anything unexpected
         return base.rejected(f"Risk evaluation error: {type(exc).__name__}: {exc}")
 
 
 def _evaluate(base, signal, account, instrument, quote, limits, environment, breaker, now, duplicate_check,
-              session_calendar):
+              session_calendar, event_guard):
     reasons: list[str] = []
 
     def reject() -> RiskDecision:
@@ -195,6 +196,11 @@ def _evaluate(base, signal, account, instrument, quote, limits, environment, bre
         closed = session_calendar.tradeable_reason(now)
         if closed:
             reasons.append(f"Market session: {closed}")
+    # Economic-event / holiday blackout (deterministic calendar data, never AI opinion).
+    if event_guard is not None:
+        blackout = event_guard(now)
+        if blackout:
+            reasons.append(f"Event blackout: {blackout}")
 
     # 5. Signal/quote freshness and price sanity.
     age = _age_reason("Signal", signal.generated_at, now, limits.max_signal_age)

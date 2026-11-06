@@ -38,24 +38,41 @@ def us_dst_active(moment: datetime) -> bool:
     return start <= moment < end
 
 
+def _last_sunday(year: int, month: int) -> date:
+    nxt = date(year + (month == 12), month % 12 + 1, 1)
+    last = nxt - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - 6) % 7)
+
+
+def eu_dst_active(moment: datetime) -> bool:
+    """EU/UK summer time: last Sunday of March 01:00 UTC to last Sunday of October 01:00 UTC."""
+    require_utc(moment, "moment")
+    start = datetime.combine(_last_sunday(moment.year, 3), datetime.min.time(), timezone.utc) + timedelta(hours=1)
+    end = datetime.combine(_last_sunday(moment.year, 10), datetime.min.time(), timezone.utc) + timedelta(hours=1)
+    return start <= moment < end
+
+
+_DST_RULES = {"us": us_dst_active, "eu": eu_dst_active}
+
+
 @dataclass(frozen=True)
 class ServerTimeZone:
     name: str
     standard_offset: timedelta
     dst_offset: timedelta | None = None  # None: fixed offset
-    dst_rule: str | None = None  # "us" is the only supported rule
+    dst_rule: str | None = None  # "us" or "eu"
 
     def __post_init__(self):
         if (self.dst_offset is None) != (self.dst_rule is None):
             raise ValidationError("dst_offset and dst_rule must be given together")
-        if self.dst_rule not in (None, "us"):
+        if self.dst_rule not in (None, *_DST_RULES):
             raise ValidationError(f"Unsupported DST rule {self.dst_rule!r}")
         for offset in (self.standard_offset, self.dst_offset):
             if offset is not None and (abs(offset) > timedelta(hours=14) or offset % timedelta(minutes=15)):
                 raise ValidationError("Server UTC offsets must be multiples of 15 minutes within ±14h")
 
     def offset_at(self, moment: datetime) -> timedelta:
-        if self.dst_rule == "us" and us_dst_active(moment):
+        if self.dst_rule is not None and _DST_RULES[self.dst_rule](moment):
             return self.dst_offset
         require_utc(moment, "moment")
         return self.standard_offset
@@ -96,6 +113,14 @@ def fixed_offset(hours: float, name: str | None = None) -> ServerTimeZone:
     offset = timedelta(hours=hours)
     return ServerTimeZone(name or f"UTC{hours:+g}", offset)
 
+
+LONDON = ServerTimeZone("europe_london", timedelta(0), timedelta(hours=1), "eu")
+NEW_YORK = ServerTimeZone("america_new_york", timedelta(hours=-5), timedelta(hours=-4), "us")
+
+# EET with EU daylight saving (UTC+2 winter, UTC+3 summer). Verified for MetaQuotes-Demo on 2026-11-06 from
+# 98,250 M15 XAUUSD bars: 2 bars fell outside New York gold market hours under this rule vs 304 under NY_CLOSE
+# (all in the US/EU DST-mismatch weeks). Brokers differ: always verify (fresh tick + session structure).
+EET_EU = ServerTimeZone("eet_eu_dst_utc+2/+3", timedelta(hours=2), timedelta(hours=3), "eu")
 
 # Typical XAUUSD broker convention. Must be confirmed per broker before use.
 NY_CLOSE = ServerTimeZone("ny_close_utc+2/+3", timedelta(hours=2), timedelta(hours=3), "us")
