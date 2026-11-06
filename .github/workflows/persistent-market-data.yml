@@ -35,7 +35,7 @@ jobs:
         run: |
           git fetch origin market-data
           git worktree add --detach data-store origin/market-data
-      - name: Retrieve only missing closed BTCUSDT hourly candles
+      - name: Retrieve only missing closed Coinbase BTC-USD hourly candles
         run: |
           python - <<'PY'
           from datetime import datetime, timedelta, timezone
@@ -58,7 +58,8 @@ jobs:
               start_ms = end_ms - 7 * 24 * step
           result = update_dataset(
               destination, symbol=symbol, interval=interval,
-              start_ms=start_ms, end_ms=end_ms, now_ms=end_ms
+              start_ms=start_ms, end_ms=end_ms, now_ms=end_ms,
+              source="coinbase_exchange"
           )
           print(f"Verified {result['row_count']} candles, added {result['new_rows']}; SHA256={result['sha256']}")
           PY
