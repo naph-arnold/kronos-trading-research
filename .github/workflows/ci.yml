@@ -31,7 +31,9 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install development tools
-        run: python -m pip install -r requirements-dev.txt
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install numpy==1.26.4 pandas==2.2.2
       - name: Check Python syntax
         run: python -m compileall -q model examples tests webui research
       - name: Lint project configuration and smoke tests
