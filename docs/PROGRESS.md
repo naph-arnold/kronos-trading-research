@@ -444,8 +444,21 @@ instructions: `docs/phase2d-shadow-forward-test.md`.
 | XAUUSD commission | **Blocked** (unverified; broker docs or an authorized demo trade) |
 | Execution / order placement | Not started (not authorized) |
 
+### Runner launch (2026-11-07 05:32 UTC)
+- Pre-flight: PR stack #12 → #11 → #10 → #9 intact and unmerged; frozen hashes re-verified (ORB `c00dae9ee89b0a65`;
+  random controls seeds 1–5, `RandomEntryParams` hashes `358997b78a720225`, `8ac2786d10117db3`, `43018fb9379923ac`,
+  `eac8e95d2f56391f`, `2ae6fc1f623cc790`); against the installed MetaTrader5 5.0.6231 package the proxy blocks
+  `order_send`, `order_check`, `Buy`, `Sell`, `Close`, `login`; 247 safety tests passed; KILL and STOP verified live.
+- MT5: MetaQuotes-Demo, demo trade mode, 0 positions/orders, terminal Algo Trading disabled (extra guard).
+- Machine: Windows "Balanced" plan sleeps after 3 min idle on AC. `run_shadow.ps1` now holds a process-scoped
+  keep-awake (`SetThreadExecutionState`), with no power-plan change. Lid close/manual sleep still stop it. Clock is
+  within ~1.3 s of an internet time source; the Windows time service is stopped (manual start).
+- Started `research/forward_test/run_shadow.ps1` detached (state `state/phase2d_shadow/`): 6,166 warm-up bars,
+  calendars refreshed, heartbeats every 60 s, 0 interruptions. Sessions stay unverified until the reopen
+  (Sun 2026-11-08 23:00 UTC), so no entries are possible before then; the forward window starts 2026-11-09.
+
 ### Next step
-Operator starts the runner (`$env:EXECUTION_MODE="demo"; .venv311\Scripts\python -m research.phase2d_shadow run`, or
+Operator keeps the runner (`$env:EXECUTION_MODE="demo"; .venv311\Scripts\python -m research.phase2d_shadow run`, or
 `research/forward_test/run_shadow.ps1`) before the Sunday 2026-11-08 23:00 UTC reopen and keeps the terminal
 logged in. Weekly `report`; interim checkpoint at 50 candidate trades; final evaluation at ≥ 100 trades and
 ≥ 2027-05-09. No parameter changes; no execution adapters until explicitly authorized.
