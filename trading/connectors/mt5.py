@@ -32,6 +32,8 @@ READ_ONLY_FUNCTIONS = frozenset({
     "symbols_get", "symbols_total", "symbol_info", "symbol_info_tick", "symbol_select",
     "copy_rates_range", "copy_rates_from_pos", "copy_rates_from", "copy_ticks_range",
     "order_calc_margin", "order_calc_profit", "positions_get", "positions_total", "orders_get", "orders_total",
+    # Account history (read-only): the only verifiable source of the commission actually charged per deal.
+    "history_deals_get", "history_deals_total", "history_orders_get", "history_orders_total",
 })
 
 TIMEFRAMES = {"1m": "TIMEFRAME_M1", "5m": "TIMEFRAME_M5", "15m": "TIMEFRAME_M15", "30m": "TIMEFRAME_M30",
@@ -401,6 +403,30 @@ def read_ticks(conn: "Mt5ReadOnlyConnector", name: str, start: datetime, end: da
                 out.append((conn.server_tz.server_msc_to_utc(int(row["time_msc"])), bid, ask))
         cursor = nxt
     return out
+
+
+def commission_evidence(conn: "Mt5ReadOnlyConnector", name: str) -> dict:
+    """Read-only: commission actually charged on this account's own deals in `name`.
+
+    MT5 exposes no per-symbol commission schedule. Commission counts as verified only when the account
+    history contains executed deals in the symbol (deal `commission` per deal volume, per side). An empty
+    history leaves it unverified; no trade is ever placed to obtain it."""
+    mt5 = conn._require()
+    start, end = datetime(2000, 1, 1), datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=2)
+    rows = [_as_dict(d) for d in (mt5.history_deals_get(start, end) or ())]
+    symbol_deals = [d for d in rows if d.get("symbol") == name and (d.get("volume") or 0) > 0]
+    per_lot = sorted({round(abs(float(d.get("commission") or 0.0)) / float(d["volume"]), 4) for d in symbol_deals})
+    result = {"source": "mt5.history_deals_get (read-only, this account)", "account_deals": len(rows),
+              "symbol_deals": len(symbol_deals), "commission_per_lot_per_side_observed": per_lot,
+              "fees_observed": sorted({float(d.get("fee") or 0.0) for d in symbol_deals})}
+    if not symbol_deals:
+        result.update(verified=False, status=f"unverified: no executed {name} deals in this account's history")
+    elif len(per_lot) == 1:
+        result.update(verified=True, status=f"verified from {len(symbol_deals)} deals: {per_lot[0]} per lot per side "
+                                            f"({round(2 * per_lot[0], 4)} round trip)")
+    else:
+        result.update(verified=False, status="inconsistent commission across deals; confirm with the broker")
+    return result
 
 
 def spread_statistics(bars: list[Mt5Bar], point: Decimal) -> dict:

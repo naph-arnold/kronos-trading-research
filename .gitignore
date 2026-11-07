@@ -80,3 +80,5 @@ data/processed/
 research/output/
 *.csv.tmp
 .venv311/
+# Shadow forward-test runtime state (SQLite, breaker, kill file)
+state/

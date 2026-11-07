@@ -311,3 +311,26 @@ def test_commission_assumption_only_when_commission_is_the_sole_gap():
     conn2, _ = connect(restricted, commission=None)
     with pytest.raises(ValidationError):
         conn2.symbol_specification("XAUUSD").to_instrument_spec(commission_assumption=D("0"))
+
+
+def test_commission_evidence_reads_account_deals_only():
+    from trading.connectors.mt5 import commission_evidence
+
+    class DealsFake(FakeMt5):
+        def __init__(self, deals, **kw):
+            super().__init__(**kw)
+            self.deals = deals
+
+        def history_deals_get(self, start, end):
+            return self.deals
+
+    empty, _ = connect(DealsFake([]))
+    assert commission_evidence(empty, "XAUUSD")["verified"] is False
+    deals = [{"symbol": "XAUUSD", "volume": 0.10, "commission": -0.35, "fee": 0.0},
+             {"symbol": "XAUUSD", "volume": 0.20, "commission": -0.70, "fee": 0.0},
+             {"symbol": "EURUSD", "volume": 1.0, "commission": -7.0, "fee": 0.0},
+             {"symbol": "", "volume": 0.0, "commission": 0.0, "fee": 0.0}]  # balance operation
+    conn, _ = connect(DealsFake(deals))
+    evidence = commission_evidence(conn, "XAUUSD")
+    assert evidence["verified"] and evidence["commission_per_lot_per_side_observed"] == [3.5]
+    assert evidence["symbol_deals"] == 2 and "7.0 round trip" in evidence["status"]

@@ -85,6 +85,20 @@ providers (official/licensed, attributed)        market-specific rules          
 - Forward tests are pre-registered (frozen parameters, criteria, checkpoints) and run in shadow mode (read-only data,
   simulated fills, no order calls) until Phase 3 is explicitly authorized.
 
+## Shadow forward testing (Phase 2D)
+- `trading/shadow/` is a simulation engine with **no order-routing code** (a structural test rejects order calls). Market
+  data arrives only through the read-only MT5 allowlist proxy; the account must report the demo trade mode.
+- Event order is strict: a bar-close event at C precedes ticks stamped ≥ C; signals fill at the first tick ≥ C.
+  Entries need a fill tick processed within 30 s of real time; catch-up after downtime manages open simulated
+  positions but rejects entries ("system not live").
+- Every simulated entry passes the unchanged `trading.risk.evaluate` plus the pre-trade gate's preconditions
+  (broker-verified sessions, fresh spec, mandatory calendar/market-health guard, durable duplicate claims), per
+  hypothetical book (strategy × equity × commission scenario) with its own daily-loss ledger.
+- State (bars, signals, every decision, positions, trades, equity marks, events, heartbeats) lives in one SQLite
+  file; strategy state is rebuilt deterministically from stored bars and must reproduce recorded signals.
+- Pre-registration is enforced in code: config ↔ pre-registration file hash, parameter hashes and risk fraction.
+  Details: [phase2d-shadow-forward-test.md](phase2d-shadow-forward-test.md).
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.
