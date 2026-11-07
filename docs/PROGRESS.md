@@ -423,6 +423,8 @@ instructions: `docs/phase2d-shadow-forward-test.md`.
   timestamps/latency, sessions, calendar/health guards, costs, restart recovery, duplicates, rollback,
   reconciliation, daily-loss halt, kill file, min-lot at 3,000 USD, demo-only/read-only, pre-registration lock,
   calendar file, reports, end-to-end runner with a synthetic feed) + 1 connector test. Ruff (CI list) clean.
+  GitHub Actions `fast-checks` on `60b64d2`: **411 passed**, ruff and pip-audit clean
+  ([run 42342318588](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42342318588)); PR #12.
 - Live read-only smoke run on MetaQuotes-Demo (2026-11-07, market closed): demo account confirmed (3,000 USD,
   0 positions, 0 orders, unchanged); swap verified from `symbol_info`; FOMC, BEA, ECB and BLS-file calendars
   refreshed; 6,166 warm-up M15 bars (2026-08-03 → 2026-11-06) → 188 warm-up-only signals, 0 decisions, 0 trades;
