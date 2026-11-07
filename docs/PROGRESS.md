@@ -1,6 +1,6 @@
 # Kronos Trading Bot — Verified Progress
 
-Updated: 2026-11-06
+Updated: 2026-11-07
 
 ## Approved decisions
 - XAUUSD via MetaTrader 5 demo and BTC/USDT via Binance Spot Testnet.
@@ -19,6 +19,7 @@ Updated: 2026-11-06
 - [x] Phase 1: Shared schema, risk engine, test suite and data validation — implemented and verified locally on Python 3.11 (CI pins) and 3.14; pull request open for review (see milestones below). Not merged.
 - [x] Phase 2A: XAUUSD strategy research on MetaQuotes-Demo MT5 data — verified data, broker-verified sessions, walk-forward + holdout results recorded (no robust edge; all experimental). Commission per lot still unverified.
 - [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
+- [x] Phase 2D: XAUUSD shadow forward-test system (read-only, simulation only) — implemented, tested, smoke-run read-only against MetaQuotes-Demo; forward data collection starts 2026-11-09 once the runner is started. No forward results yet.
 - [ ] Phase 3: Independent automated demo execution adapters.
 - [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
 - [ ] Phase 5: Monitored continuous demo validation.
@@ -384,6 +385,83 @@ Minimum lot: 3,000 USD allows stops ≤ 14.67 USD → only 8–43% of 2026 signa
 Build the read-only shadow forward-test runner (live closed M15 bars, simulated fills from live ticks, no order
 functions), switch the demo balance to 10,000 USD if possible, confirm commission, then start the pre-registered
 forward window. No execution adapters until explicitly authorized.
+
+---
+
+## Milestone: Phase 2D — XAUUSD shadow forward-test system (2026-11-07)
+
+Branch `feat/phase2d-shadow-forward-test` (stacked on PR #11 → #10 → #9). Simulation only: no MT5 orders can be
+sent; strategy parameters frozen by the pre-registration; 0.5% risk fraction unchanged. Methodology and operating
+instructions: `docs/phase2d-shadow-forward-test.md`.
+
+### Pre-flight checks
+- PR #9 (draft, docs), #10 (Phase 1) and #11 (Phase 2/2A/2C) open and unmerged; new branch created from #11's head
+  (`64e1f7f`), so all dependencies are preserved.
+- Frozen hashes re-verified from code: ORB New York `c00dae9ee89b0a65`, H1 EMA cross `e8257efa97a2b2a3` (both equal
+  the pre-registration). The pre-registration file is pinned by normalized SHA-256 `6f743af6…` in the config.
+
+### Added
+- `trading/shadow/engine.py` — event-driven shadow engine: closed bars + live ticks → strategies → unchanged
+  `trading.risk.evaluate` → simulated fills (ask/bid + slippage, stop-first, TP at limit, 16-bar time exit, bar
+  fallback), commission per round trip, verified swap; "system not live" rule; warm-up vs unseen data; per-book
+  daily-loss ledger; reconciliation; deterministic restart.
+- `trading/shadow/store.py` — SQLite state with UNIQUE constraints for one decision per (book, signal) and one
+  approved claim per (book, dedup key); atomic batches.
+- `trading/shadow/costs.py` (swap/commission conventions), `trading/shadow/report.py` (metrics, comparison,
+  rejections, risk exceptions, uptime, pre-registered criteria without a premature verdict).
+- `research/phase2d_shadow.py` — CLI `build-calendar | run | report | status | reset-breaker | commission-evidence`;
+  config `research/configs/phase2d_shadow_xauusd.json` (28 books: 7 strategies × 10,000/3,000 USD × commission 0/7).
+- `research/forward_test/calendar/us_cpi_nfp_bls_2026_2027.json` — 28 CPI/Employment Situation releases
+  (Nov 2026 – Dec 2027, 08:30 ET) from BLS schedule pages, cross-checked against OMB's 2027 PFEI schedule. Closes
+  the CPI/NFP coverage gap that made the calendar guard fail closed.
+- `research/forward_test/run_shadow.ps1` — optional supervising loop (operator registers it if desired).
+- Read-only MT5 allowlist extended with `history_deals_*` / `history_orders_*`; `commission_evidence()`.
+
+### Verified results
+- Tests: `python -m pytest -q tests --ignore=tests/test_kronos_regression.py` → **415 passed, 8 integration
+  deselected** (Python 3.11.18; previously 378). New: 36 in `tests/test_phase2d_shadow.py` (simulated execution,
+  timestamps/latency, sessions, calendar/health guards, costs, restart recovery, duplicates, rollback,
+  reconciliation, daily-loss halt, kill file, min-lot at 3,000 USD, demo-only/read-only, pre-registration lock,
+  calendar file, reports, end-to-end runner with a synthetic feed) + 1 connector test. Ruff (CI list) clean.
+  GitHub Actions `fast-checks` on `60b64d2`: **411 passed**, ruff and pip-audit clean
+  ([run 42342318588](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42342318588)); PR #12.
+- Live read-only smoke run on MetaQuotes-Demo (2026-11-07, market closed): demo account confirmed (3,000 USD,
+  0 positions, 0 orders, unchanged); swap verified from `symbol_info`; FOMC, BEA, ECB and BLS-file calendars
+  refreshed; 6,166 warm-up M15 bars (2026-08-03 → 2026-11-06) → 188 warm-up-only signals, 0 decisions, 0 trades;
+  session calendar correctly stayed unverified (no fresh tick on a weekend → entries fail closed). Restart on the
+  same state reproduced all 188 signals (0 mismatches), reconciliation OK, no breaker trips.
+- Commission: account history has 1 deal (balance deposit) and no XAUUSD deals; MT5 Python 5.0.6231 has no
+  commission query; no official MetaQuotes-Demo fee schedule found → **unverified**; scenarios 0 and 7 USD/lot
+  round trip reported separately. No trade placed.
+
+### Component status
+| Component | Status |
+| --- | --- |
+| Shadow engine, store, costs, reports | **Completed** (tested) |
+| Live runner on MetaQuotes-Demo | **Verified** start-up/restart read-only (weekend); **Not started** for the forward window |
+| CPI/NFP schedule coverage | **Completed** through 2027-12 (static; monthly operator re-check required) |
+| Forward-test results | **Not started** — window opens 2026-11-09; no results exist |
+| XAUUSD commission | **Blocked** (unverified; broker docs or an authorized demo trade) |
+| Execution / order placement | Not started (not authorized) |
+
+### Runner launch (2026-11-07 05:32 UTC)
+- Pre-flight: PR stack #12 → #11 → #10 → #9 intact and unmerged; frozen hashes re-verified (ORB `c00dae9ee89b0a65`;
+  random controls seeds 1–5, `RandomEntryParams` hashes `358997b78a720225`, `8ac2786d10117db3`, `43018fb9379923ac`,
+  `eac8e95d2f56391f`, `2ae6fc1f623cc790`); against the installed MetaTrader5 5.0.6231 package the proxy blocks
+  `order_send`, `order_check`, `Buy`, `Sell`, `Close`, `login`; 247 safety tests passed; KILL and STOP verified live.
+- MT5: MetaQuotes-Demo, demo trade mode, 0 positions/orders, terminal Algo Trading disabled (extra guard).
+- Machine: Windows "Balanced" plan sleeps after 3 min idle on AC. `run_shadow.ps1` now holds a process-scoped
+  keep-awake (`SetThreadExecutionState`), with no power-plan change. Lid close/manual sleep still stop it. Clock is
+  within ~1.3 s of an internet time source; the Windows time service is stopped (manual start).
+- Started `research/forward_test/run_shadow.ps1` detached (state `state/phase2d_shadow/`): 6,166 warm-up bars,
+  calendars refreshed, heartbeats every 60 s, 0 interruptions. Sessions stay unverified until the reopen
+  (Sun 2026-11-08 23:00 UTC), so no entries are possible before then; the forward window starts 2026-11-09.
+
+### Next step
+Operator keeps the runner (`$env:EXECUTION_MODE="demo"; .venv311\Scripts\python -m research.phase2d_shadow run`, or
+`research/forward_test/run_shadow.ps1`) before the Sunday 2026-11-08 23:00 UTC reopen and keeps the terminal
+logged in. Weekly `report`; interim checkpoint at 50 candidate trades; final evaluation at ≥ 100 trades and
+≥ 2027-05-09. No parameter changes; no execution adapters until explicitly authorized.
 
 ---
 

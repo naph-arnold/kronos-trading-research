@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "name": "phase2d-xauusd-shadow-forward-test",
+  "preregistration": "research/forward_test/phase2c_xauusd_preregistration.json",
+  "preregistration_sha256": "6f743af6fd7c11befe251fd00bf267ddfce4d3fbc8f0c83d4604a12a9dc3f723",
+  "simulation_only": true,
+  "server_tz": "eet_eu",
+  "state_dir": "state/phase2d_shadow",
+  "warmup_start": "2026-08-03T00:00:00+00:00",
+  "equities": ["10000", "3000"],
+  "primary_equity": "10000",
+  "commission_scenarios_usd_per_lot_round_trip": ["0", "7"],
+  "commission_convention": "USD per 1.00 lot (100 oz) per round trip (open + close), charged on close; 7 USD/lot RT = 3.50 per side. ASSUMPTION - broker commission unverified.",
+  "risk": {
+    "risk_fraction": "0.005",
+    "daily_loss_halt_fraction": "0.015",
+    "aggregate_risk_fraction": "0.01",
+    "max_spread": "1.00",
+    "slippage_allowance": "0.10"
+  },
+  "strategies": {
+    "orb_newyork": {
+      "kind": "orb",
+      "role": "candidate",
+      "prereg_id": "xau-orb-newyork",
+      "params": {"session": "newyork", "range_minutes": 30, "entry_window_minutes": 180, "atr_period": 14,
+                 "breakout_buffer_atr": 0.1, "min_range_atr": 0.5, "max_range_atr": 3.0, "stop_at": "opposite",
+                 "reward_to_risk": 1.5},
+      "max_holding_bars": 16
+    },
+    "h1_ema_cross": {
+      "kind": "h1_trend",
+      "role": "trend control",
+      "prereg_id": "xau-baseline-h1-ema-cross",
+      "params": {"ema_fast": 50, "ema_slow": 200, "atr_period": 14, "atr_stop_mult": 3.0, "reward_to_risk": 2.0},
+      "max_holding_bars": null
+    },
+    "random": {
+      "kind": "random",
+      "role": "matched random-entry control",
+      "prereg_family": "random_1.0atr_1.5r_time16_long51",
+      "family_source": "research/configs/phase2c_xauusd.json baselines.random_families",
+      "params": {"entry_probability": 0.004, "atr_stop_mult": 1.0, "reward_to_risk": 1.5, "long_probability": 0.51},
+      "seeds": [1, 2, 3, 4, 5],
+      "max_holding_bars": 16
+    }
+  },
+  "calendar": {
+    "official_providers": true,
+    "cpi_nfp_file": "research/forward_test/calendar/us_cpi_nfp_bls_2026_2027.json",
+    "cpi_nfp_provider": "bls.gov/schedule",
+    "refresh_hours": 12,
+    "session_weeks": 8
+  },
+  "health": {"max_quote_age_s": 15, "max_quote_gap_s": 60, "abnormal_spread_multiple": "4"},
+  "runner": {"poll_seconds": 5, "tick_settle_seconds": 2, "max_decision_latency_s": 30, "heartbeat_seconds": 60,
+             "tick_chunk_minutes": 60, "max_tick_backfill_hours": 72, "spec_refresh_hours": 12},
+  "swap_fallback": {"long_points_per_lot_night": "-12.6", "short_points_per_lot_night": "-4.6",
+                    "usd_per_point_per_lot": "1.0", "triple_weekday_server": "Wednesday",
+                    "source": "MT5 symbol_info 2026-11-06 (Phase 2C); used only if live symbol_info swap is unavailable"}
+}
