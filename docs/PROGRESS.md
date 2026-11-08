@@ -531,6 +531,25 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: XAUUSD 4H-led scalping on unexamined 2019-2020 history (2026-11-08)
+
+Branch `research/xau-scalp4h-oos` (stacked on `research/mtf-scalp4h`, PR #18 unchanged). Research only; no orders;
+MT5 settings unchanged, no restart; both shadow runners untouched (100% heartbeats). Details:
+`docs/mtf-scalp4h-oos-2019-2020.md`.
+
+- **Data availability:** bar API capped at 100,000 bars (raising "Max bars in chart" needs an MT5 restart; not
+  done). Broker ticks exist for 2019-01..2020-12 (none 2021-01..2025-04). All earlier XAU work starts at or after
+  2022-09, so 2019-2020 is unexamined.
+- **Pre-registration first:** `research/forward_test/xau_scalp4h_oos_2019_2020_preregistration.json` (commit
+  b4d8a80), then data.
+- **Data validated** (`research/xau_tick_history.py`): 699,515 tick-built M1 bars identical to broker M1 on a
+  2026 overlap (100%) and to broker H1 for 2019-2020 (99.94%); 1.44% missing open minutes; no closed-time bars.
+  Spreads about twice the 2026 profile.
+- **Frozen results:** B -0.194 R (-96%); 4H-only -0.135 R (-76%); 4H+1H -0.219 R (-87%). Gross R is negative for
+  all three; 0/36 diagnostic settings profitable; every year, quarter, regime and session negative.
+- **Pre-registered decision:** B4H **not supported**; 1H alignment worse than 4H-only; no re-tuning.
+- **Tests:** `tests/test_xau_tick_history.py` (4).
+
 ## Milestone: 4H-led scalping hierarchy (scalp4h-v1, 2026-11-08)
 
 Branch `research/mtf-scalp4h` (stacked on `research/mtf-hybrid`). Research only; no orders; running shadow
