@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "title": "XAUUSD Selective Strategy A - independent pre-registered shadow forward test (simulation only, no orders)",
+  "registered_at": "2026-11-09T00:00:00+00:00",
+  "status": "registered - NOT launched. A third runner starts only after operator approval of the launch-readiness checklist.",
+  "label": "INDEPENDENT PROSPECTIVE SHADOW VALIDATION - only bars closing at or after unseen_window_starts count as evidence",
+  "data": "XAUUSD M5 closed bars + live ticks from MetaQuotes-Demo via the read-only MT5 allowlist connector, server tz eet_eu; 15M/1H/4H built causally from M5 (UTC-aligned buckets, forming bucket dropped)",
+  "unseen_window_starts": "2026-11-16T00:00:00+00:00",
+  "unseen_window_rule": "If the runner is not launched and warmed up before 2026-11-13T21:00:00Z, the start date may be moved ONCE, by a committed amendment made before the new date, to a later Monday 00:00 UTC. Nothing else may change. Data before the start is never evidence.",
+  "previously_examined_data_excluded": {
+    "development": "2025-06-02 -> 2025-12-30 (parameters selected here; 82 trades, +0.447 R, 20/20 random)",
+    "exploratory": "2025-12-30 -> 2026-11-06 (frozen parameters, 277 trades, +0.109 R, CI -0.070..+0.290; examined in Phase 2A for other strategies)",
+    "rule": "No result from 2025-06 -> 2026-11-08 is used as validation evidence; those periods are cited only as the reason for this test."
+  },
+  "candidates": [
+    {
+      "id": "xau-mtf-selective-a",
+      "version": "1.0.0",
+      "params": {
+        "dir_ema": 50,
+        "dir_slope_bars": 3,
+        "struct_k": 2,
+        "struct_ema": 20,
+        "pull_ema": 20,
+        "pull_bars": 4,
+        "pull_atr": 0.25,
+        "hold_ema": 50,
+        "atr_n": 14,
+        "confirm_bars": 6,
+        "confirm_ema": 20,
+        "stop_buffer_atr": 0.1,
+        "min_stop_atr": 0.5,
+        "reward_to_risk": 2.5,
+        "min_net_rr": 2.0,
+        "max_hold_minutes": 720
+      },
+      "params_hash": "0e560ff37aa031db",
+      "window_days": 60,
+      "max_holding_bars": 144,
+      "allow_short": true,
+      "role": "candidate",
+      "source": "trading/mtf/strategies.py selective_candidates (unchanged) via trading/mtf/shadow_adapter.py",
+      "frozen_from": "docs/mtf-hybrid-research.md section 5: RR 2.5, pull_atr 0.25, confirm_bars 6; all other parameters at the SelectiveParams defaults used in the research",
+      "adapter_parity": "On examined 2025-08..2025-09 M5 data the windowed adapter reproduced the research candidates exactly (181/181; mechanics check only, not evidence)"
+    }
+  ],
+  "controls": [
+    {
+      "id": "xau-baseline-random",
+      "version": "1.0.0",
+      "family": "random_m5_p0.0174_3.4atr5_2.5r_time144_long50",
+      "params": {
+        "entry_probability": 0.0174,
+        "atr_period": 14,
+        "atr_stop_mult": 3.4,
+        "reward_to_risk": 2.5,
+        "long_probability": 0.5
+      },
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "max_holding_bars": 144,
+      "calibration": "Strategy A candidates per M5 bar (0.01742) and median stop distance in ATR(14) of M5 (3.42) on the DEVELOPMENT period 2025-06-02 -> 2025-12-30 only. Long share fixed at 0.5 (direction-neutral) instead of the development long share 0.759.",
+      "role": "random-entry control with the candidate's exits, holding limit and net-RR cost check"
+    }
+  ],
+  "secondary_analysis": "At each checkpoint, 20 matched random seeds (same trade count, long share, stop distance in ATR units, RR and time limit as the candidate's realised trades) are re-simulated on the recorded live M5 bars with the research simulator. Reported, not a pass criterion.",
+  "rules": {
+    "no_parameter_changes": true,
+    "risk_fraction": "0.005",
+    "daily_loss_halt_fraction": "0.015",
+    "aggregate_risk_fraction": "0.01",
+    "entry_cost_rule": "planned reward-to-risk after spread (fill tick), slippage 0.10/side and commission must be >= min_net_rr 2.0 at the simulated fill; otherwise rejected (as in the research)",
+    "costs": "spread from live ticks at the simulated fill; slippage 0.10 USD/side; commission scenarios 0 and 7 USD/lot round trip; swap from symbol_info",
+    "fills": "first tick at or after the signal bar close; stop before take-profit; time exit after 144 M5 bars (12 h)",
+    "books": "10,000 and 3,000 USD x commission 0 and 7; one position per book; every entry approved and sized only by trading.risk.evaluate",
+    "independence": "Own state directory, store, daily-loss ledger, breaker and KILL/STOP files; the Phase 2D ORB and Phase 2E Donchian runners, their parameters, pre-registrations and accounts are not touched",
+    "ai_inputs": "Kronos forecasts and Grok agent recommendations, if any, are recorded separately as advisory data and never change signals, sizing or approvals"
+  },
+  "evaluation": {
+    "primary_book": {
+      "equity": "10000",
+      "commission": "7"
+    },
+    "checkpoints": [
+      "after 50 trades (interim report only; no stopping for success)",
+      "final: after >= 150 trades AND >= 183 days from the unseen start, whichever is later; hard end 548 days"
+    ],
+    "success_criteria_all_required": [
+      "net mean R per trade > 0 under the 7 USD/lot commission scenario",
+      "bootstrap 95% CI lower bound of net mean R > 0",
+      "candidate net mean R above the net mean R of every one of the 5 random-entry control books",
+      "positive net result in at least 2 of the last 3 complete two-month blocks",
+      "max drawdown < 8% of equity at 0.5% risk"
+    ],
+    "thresholds": {
+      "ci_lower_gt": 0.0,
+      "max_drawdown_pct_lt": 8.0,
+      "final_min_trades": 150,
+      "final_min_days": 183,
+      "hard_end_days": 548,
+      "safety_stop_drawdown_pct": 10.0
+    },
+    "outcomes": {
+      "pass": "all criteria pass at the final checkpoint -> eligible for operator review; no automatic promotion and no change of execution mode",
+      "inconclusive_positive": "mean R > 0 and every criterion except the CI passes -> ONE pre-declared extension to 300 trades with no changes",
+      "retire": "any other result at the final checkpoint, or the safety stop"
+    },
+    "safety_stop": "drawdown >= 10% of the primary book retires the candidate immediately",
+    "notes": [
+      "Criteria evaluated on the 10,000 USD candidate book under the 7 USD/lot round-trip commission scenario.",
+      "Two-month blocks are anchored at the unseen start; the most recent three complete blocks are used.",
+      "The 3,000 USD books are reported for minimum-lot eligibility (about half of Strategy A's signals were below the 0.01-lot minimum at 3,000 USD in research)."
+    ]
+  },
+  "forbidden": [
+    "changing any parameter, window, cost assumption or criterion after registration",
+    "using 2025-2026 examined results as validation",
+    "promotion to demo or live execution from this test without a separate approval",
+    "AI outputs changing signals, sizing, stops or risk limits"
+  ]
+}

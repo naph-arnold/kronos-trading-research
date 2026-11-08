@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "name": "xau-selective-a-shadow-forward-test",
+  "preregistration": "research/forward_test/xau_selective_a_preregistration.json",
+  "preregistration_sha256": "b8574f530356721cca3288432c7a5ff6ec8ad02db02b20da87a08d850fc32bf6",
+  "simulation_only": true,
+  "launch_approved": false,
+  "server_tz": "eet_eu",
+  "state_dir": "state/xau_selective_a_shadow",
+  "warmup_start": "2026-09-01T00:00:00+00:00",
+  "equities": [
+    "10000",
+    "3000"
+  ],
+  "primary_equity": "10000",
+  "commission_scenarios_usd_per_lot_round_trip": [
+    "0",
+    "7"
+  ],
+  "commission_convention": "USD per 1.00 lot (100 oz) per round trip (open + close), charged on close; 7 USD/lot RT = 3.50 per side. ASSUMPTION - broker commission unverified.",
+  "risk": {
+    "risk_fraction": "0.005",
+    "daily_loss_halt_fraction": "0.015",
+    "aggregate_risk_fraction": "0.01",
+    "max_spread": "1.00",
+    "slippage_allowance": "0.10"
+  },
+  "strategies": {
+    "selective_a": {
+      "kind": "selective_a",
+      "role": "candidate",
+      "prereg_id": "xau-mtf-selective-a",
+      "params": {
+        "dir_ema": 50,
+        "dir_slope_bars": 3,
+        "struct_k": 2,
+        "struct_ema": 20,
+        "pull_ema": 20,
+        "pull_bars": 4,
+        "pull_atr": 0.25,
+        "hold_ema": 50,
+        "atr_n": 14,
+        "confirm_bars": 6,
+        "confirm_ema": 20,
+        "stop_buffer_atr": 0.1,
+        "min_stop_atr": 0.5,
+        "reward_to_risk": 2.5,
+        "min_net_rr": 2.0,
+        "max_hold_minutes": 720
+      },
+      "window_days": 60,
+      "max_holding_bars": 144
+    },
+    "random": {
+      "kind": "random",
+      "role": "random-entry control",
+      "prereg_family": "random_m5_p0.0174_3.4atr5_2.5r_time144_long50",
+      "params": {
+        "entry_probability": 0.0174,
+        "atr_period": 14,
+        "atr_stop_mult": 3.4,
+        "reward_to_risk": 2.5,
+        "long_probability": 0.5
+      },
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "max_holding_bars": 144
+    }
+  },
+  "calendar": {
+    "official_providers": true,
+    "cpi_nfp_file": "research/forward_test/calendar/us_cpi_nfp_bls_2026_2027.json",
+    "cpi_nfp_provider": "bls.gov/schedule",
+    "refresh_hours": 12,
+    "session_weeks": 8
+  },
+  "health": {
+    "max_quote_age_s": 15,
+    "max_quote_gap_s": 60,
+    "abnormal_spread_multiple": "4"
+  },
+  "runner": {
+    "poll_seconds": 5,
+    "tick_settle_seconds": 2,
+    "max_decision_latency_s": 30,
+    "heartbeat_seconds": 60,
+    "tick_chunk_minutes": 60,
+    "max_tick_backfill_hours": 72,
+    "spec_refresh_hours": 12
+  },
+  "swap_fallback": {
+    "long_points_per_lot_night": "-12.6",
+    "short_points_per_lot_night": "-4.6",
+    "usd_per_point_per_lot": "1.0",
+    "triple_weekday_server": "Wednesday",
+    "source": "MT5 symbol_info 2026-11-06 (Phase 2C); used only if live symbol_info swap is unavailable"
+  }
+}

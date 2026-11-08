@@ -1,6 +1,6 @@
 # Kronos Trading Bot — Verified Progress
 
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 ## Approved decisions
 - XAUUSD via MetaTrader 5 demo and BTC/USDT via Binance Spot Testnet.
@@ -531,6 +531,55 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: XAUUSD Selective Strategy A shadow validation prepared (2026-11-09)
+
+Branch `feat/xau-selective-a-shadow-prep` (based on `research/volume-profile`, PR #20, with `ops/dual-runner-reliability`,
+PR #16, merged in for the hardened XAUUSD runner). Details: `docs/xau-selective-a-shadow.md`.
+
+**Status: prepared and tested; NOT launched.** Launch requires operator approval. No orders. The Phase 2D/2E runners,
+their code (`research/phase2d_shadow.py`, `trading/shadow/engine.py` unchanged), parameters, pre-registrations, state
+and accounts are untouched.
+
+- Implemented:
+  - `trading/mtf/shadow_adapter.py`: Strategy A on M5 bars via the unchanged `selective_candidates`, plus
+    `net_rr_check`, the research fill-time rule net RR ≥ 2.0.
+  - `research/xau_selective_a_shadow.py`: an engine subclass whose checks can only reject; a runner subclass of the
+    hardened Phase 2D runner; the criteria evaluator; and a CLI whose `run` refuses without `--i-have-launch-approval`.
+  - `research/forward_test/xau_selective_a_preregistration.json`: unseen start 2026-11-16 00:00 UTC; 2025-06 →
+    2026-11-08 explicitly excluded as evidence.
+  - `research/configs/xau_selective_a_shadow.json`: own state `state/xau_selective_a_shadow`; 24 books.
+- Verified:
+  - `tests/test_xau_selective_a_shadow.py`: 13 passed.
+  - Adapter parity on examined 2025-08 → 2025-09 real M5 data: 181/181 candidates identical (mechanics check, not
+    evidence).
+- Blocked or pending:
+  - operator launch approval;
+  - MT5 multi-client probe (needs approval);
+  - memory headroom (1.40 GB free on 2026-11-08 with two runners plus research jobs);
+  - supervisor task and health-report coverage for a third runner (ops changes).
+
+## Milestone: Shadow runner verification before the 2026-11-09 forward start (2026-11-09)
+
+Read-only checks: `research.dual_health_report` over 1/6/12/24 h, process list, Task Scheduler, both SQLite stores.
+
+- **XAUUSD NY ORB (Phase 2D):**
+  - Runner pid 35948 under the `Kronos Shadow XAUUSD` task.
+  - 100% heartbeat uptime over the last 6 h; 98.4% over 12 h.
+  - One 11.6-minute gap at 13:18–13:30 UTC on 2026-11-08: the previous runner exited without a traceback and the
+    supervisor task restarted it at its next 15-minute trigger. The cause was not determined (no Windows
+    resource-exhaustion or shutdown events).
+  - Pre-registration consistent; 28 books, all flat at their initial equity; reconciliation ok.
+  - The MT5 demo account is unchanged (balance 3,000, 0 positions, 0 orders).
+  - Entries are correctly blocked while the market is closed. The server-clock offset cannot be verified without a
+    fresh tick (fail closed); this should clear at the Sunday open (23:00 UTC).
+- **BTC/USDT Donchian (Phase 2E):**
+  - Runner pid 5264. 100% uptime since 2026-11-08 04:45 UTC, with no gaps over 3 minutes.
+  - Websocket connected; fresh data 99.8–100%.
+  - Pre-registration consistent; 18 books flat.
+- The earlier gaps in the 24-hour window are the approved runner restarts of 2026-11-07/08 (power/task changes).
+- To verify after the Sunday open: the XAUUSD session calendar becomes `broker_verified` and fresh market data
+  resumes.
+
 ## Milestone: Volume Profile value-area research, vp-v1 (2026-11-08)
 
 Branch `research/volume-profile` (stacked on `research/xau-scalp4h-oos`, PR #19). Research only; no orders (live,
@@ -650,6 +699,173 @@ heartbeats during the research load. Details: `docs/mtf-hybrid-research.md`.
 Pre-register an independent shadow forward test for XAUUSD Strategy A with frozen parameters (RR 2.5, pull_atr
 0.25, confirm_bars 6), in a separate state directory, without touching the running experiments. Optionally raise
 MT5 max bars first to validate on unexamined pre-2025-06 M5 data.
+
+## Milestone: Architecture alignment (ADR-001) and XAUUSD heartbeat reliability (2026-11-08)
+
+Branch `fix/xau-shadow-heartbeat` (from PR #12's head `9d43b26`). PR #13 (ADR-001, draft) and PR #14 (Phase 2E)
+reviewed and left unmerged.
+
+### ADR-001 (PR #13) compliance review
+| Decision | Status in code |
+| --- | --- |
+| Python is the central engine (strategies, risk, calendar, Kronos, audit, monitoring) | Compliant |
+| Python MT5 connector preserved; read-only allowlist proxy (`order_send`, `order_check`, `Buy`, `Sell`, `Close` blocked) | Compliant |
+| Binance shadow pipeline preserved (PR #14), public read-only data, simulated fills | Compliant (running, unmodified) |
+| Independent pipelines (process, state, breaker, daily ledger, calendar store, KILL/STOP) | Compliant |
+| No MQL5 EA; MQL5 only after a measured Python-vs-MQL5 comparison and Phase 3 approval | Compliant (none written) |
+| Kronos as forecaster; six agents on the official xAI Grok API; no AI bypass of the risk engine | Compliant (agents inactive) |
+ADR-001's note that the crypto shadow pipeline is "not confirmed complete" predates PR #14, which now implements
+and runs it.
+
+### Heartbeat fix
+- Cause: heartbeats were written only in `housekeeping()` after a successful poll, and a disconnected MT5 at start-up
+  made the process exit with no heartbeat at all.
+- `research/phase2d_shadow.py`: `HeartbeatThread` writes every minute regardless of polling (reads state only; never
+  calls MT5); `ConnectionHealth` counters; start-up retries while MT5 is unavailable; failure/reconnect tracking.
+  Engine, strategies, parameters and risk limits unchanged.
+- `trading/shadow/report.py`: `uptime.data_availability` separates data availability from runner uptime.
+- `research/forward_test/run_shadow.ps1`: adds `ES_DISPLAY_REQUIRED`. The System log showed "entering Modern Standby,
+  Reason: Idle Timeout" at 05:09:26 UTC despite `ES_SYSTEM_REQUIRED`.
+- Tests: 4 new (disconnection never reported as fresh data; closed market and stale data; heartbeats continue while
+  every poll fails, with failure/reconnect counters; start-up retries with `waiting_for_mt5` heartbeats).
+  `pytest -q tests --ignore=tests/test_kronos_regression.py` → **419 passed, 8 integration deselected** (Python
+  3.11.18); ruff (CI list) clean.
+
+### Restart of the XAUUSD runner (only)
+1. Consistent SQLite backups with SHA-256 manifests and integrity checks:
+   - `state/backups/phase2d_shadow_20261108T050123Z`: online backup while running.
+   - `..._20261108T050608Z_stopped`: after stopping.
+   - Contents: 6,166 warm-up bars, 188 warm-up signals, 0 decisions/trades/positions, all 28 books at starting
+     equity, preregistration hash `6f743af6…` intact.
+2. Rehearsal: the new code ran once against a copy of the state with a KILL file. Restore was exact (0 signal
+   mismatches), reconciliation OK, KILL blocked entries, and the MT5 demo account was unchanged.
+3. STOP → runner and supervisor exited cleanly → relaunched.
+4. The first relaunch (05:06 UTC) was terminated externally about 6 s after start-up: both supervisor and runner
+   vanished with no exit line or crash entry. The same code ran normally in the foreground for 2 minutes, so the
+   cause is outside the runner code and is still unexplained.
+5. Relaunched at 05:15 UTC. The restore again showed 0 mismatches, and heartbeats arrived every 60 s.
+
+### Runner health (2026-11-08 ~05:23 UTC)
+- XAUUSD:
+  - Running, MT5 connected; market correctly closed until Sunday 23:00 UTC; entries blocked.
+  - Session calendar stays unverified until a fresh tick after the reopen.
+  - Demo account 3,000 USD with 0 positions and 0 orders, unchanged.
+- BTC/USDT (inspected read-only; not restarted):
+  - Running since 04:45 UTC; 37 heartbeats, all `ok`, largest gap 73 s during the 31-second standby.
+  - WebSocket connected (46k messages, 0 reconnects).
+  - Warm-up only (965 signals); 0 decisions/trades; breaker clear; config matches the preregistration.
+
+### Next step
+Watch the Sunday 23:00 UTC reopen: the XAUUSD session calendar should become broker-verified, and both runners
+should record live (non-warm-up) bars after 2026-11-09 00:00 UTC. Investigate the external process termination
+(consider a Windows scheduled task for supervision, which needs operator approval).
+
+---
+
+## Milestone: Dual-runner reliability and monitoring (2026-11-08)
+
+Branch `ops/dual-runner-reliability` (from PR #15's head `2436d78`). Neither runner was restarted for this milestone.
+Details and evidence: `docs/operations-windows.md`.
+
+### Verified findings
+- **XAUUSD termination (05:06 UTC): cause undetermined.** It was an abrupt kill: no PowerShell engine-stop
+  record, no crash/WER entry, no runner exit line. The process-exit audit trail is disabled. The WMI-host
+  hypothesis is refuted (surviving supervisors outlived their WMI parents). The same code ran normally in the
+  foreground and after relaunch.
+- **Correction:** the 11-07/08 "broker disconnections" were mainly **Modern Standby**. XAUUSD reconnect/disconnect
+  times match Kernel-Power standby exit/entry to the second. The PC sleeps after 3 min idle on AC.
+  `ES_SYSTEM_REQUIRED` did not prevent it (05:09 UTC); `ES_DISPLAY_REQUIRED` (active in the XAUUSD supervisor) does,
+  but keeps the screen on.
+- **Runner health (05:35 UTC):**
+  - XAUUSD: running since 05:15, heartbeats every 60 s, MT5 connected, market correctly closed, entries blocked.
+  - BTC/USDT: running since 04:45, all heartbeats `ok`, WebSocket connected with quotes < 1 s old, 0 reconnects.
+  - Both: warm-up only; 0 decisions/trades/positions; all books at starting equity; breakers clear;
+    pre-registration hashes consistent (file = config = state).
+- **No orders possible:**
+  - MT5 proxy blocks `order_send`, `order_check`, `Buy`, `Sell`, `Close`, `login` and `market_book_add` (checked
+    against the installed package).
+  - Binance paths are market data plus a testnet-only signed account GET (no keys configured).
+  - Testnet `submit()` raises `ExecutionNotAuthorized`.
+  - No order APIs exist in either tree.
+- **Risk limits unchanged:** 0.5% / 1.5% / 1% in both configs; hard 0.5% ceiling in `trading/risk.py`.
+
+### Added (no system changes applied)
+- `ops/windows/kronos_supervisor.ps1`: single instance (mutex + running-runner scan), STOP checked before every
+  start, never touches STOP/KILL, configurable keep-awake. Verified live: refused to duplicate the running
+  XAUUSD runner; honoured STOP.
+- `ops/windows/scheduled_tasks.ps1`: log-on + 15-minute check tasks for both supervisors and a daily health task.
+  Dry run by default; `-Apply` requires approval.
+- `ops/windows/power_settings.ps1`: AC sleep → never (display still turns off), optional lid action. Dry run by
+  default; `-Apply`/`-Revert` with a saved backup. Requires approval.
+- `research/dual_health_report.py`: unified read-only report (SQLite `mode=ro`) covering uptime, disconnections,
+  data gaps, signals, decisions, trades, per-book performance, safety alerts and integrity. First run: XAUUSD 24-h
+  uptime 6.1% (legacy heartbeat gaps and standby), BTC/USDT running since 04:45; integrity consistent for both.
+- Tests: `tests/test_dual_health_report.py` (5: metrics, alerts per market, missing state, read-only, ops-script
+  safety).
+
+### Awaiting approval (persistent system changes)
+1. `ops/windows/power_settings.ps1 -Apply` (AC sleep never; optional `-LidDoNothing`). Then the supervisors can use
+   `-KeepAwake system`.
+2. `ops/windows/scheduled_tasks.ps1 -Apply` (supervision after log-on/reboot plus the daily health report).
+3. Optional, administrator: process-termination auditing, to identify any future external kill.
+
+### Forward-test readiness (2026-11-09 00:00 UTC)
+- Both pre-registrations are intact, and there are no non-warm-up signals before the boundary.
+- Both engines classify bars closing at or after 00:00 UTC as live.
+- The XAUUSD session calendar becomes broker-verified after the first fresh tick following the 23:00 UTC reopen;
+  the runner retries every 10 minutes.
+
+---
+
+## Milestone: Reliability changes applied (2026-11-08, operator-approved)
+
+Branch `ops/dual-runner-reliability` (PR #16). Details: `docs/operations-windows.md` §3a.
+
+### Applied and verified
+- **Power:**
+  - AC sleep is now *never*; AC display-off stays 3 min; battery and lid settings unchanged.
+  - Rollback verified (revert → 180 s → re-apply); originals saved.
+  - Over 25 min, user-input idle reached 1,037 s with **0 standby entries** and no Kernel-Power events.
+  - No process holds a display request.
+- **Scheduled tasks:**
+  - XAUUSD and BTCUSDT supervisors (log-on + 15-min check, IgnoreNew) plus the daily health report are registered.
+  - Startup is **after sign-in only**: Interactive principal, no auto-logon, MT5 needs the user session.
+- **Supervisor hardening:** runners now write logs directly (no pipe), so they survive a supervisor kill and are
+  adopted. Before this change a supervisor kill killed its runner (reproduced).
+- **Safe recovery tests:** run with a synthetic runner and a temporary task (removed afterwards). Adopt, no
+  duplicate, IgnoreNew, restart after a runner kill and STOP precedence all behaved as designed.
+- **Production handover:**
+  - BTC: runner **adopted, not restarted**.
+  - XAUUSD: one graceful restart was needed to retire the legacy supervisor's display request. Downtime 1 min 45 s
+    (05:54:06–05:55:51 UTC), market closed, pre-forward warm-up. Recovery exact (0 signal mismatches); backup taken
+    first.
+  - STOP verified in production: the task supervisor did not restart while STOP existed.
+
+### Runner health (≈06:00 UTC)
+- **XAUUSD:**
+  - Heartbeats every 60 s, MT5 connected, market closed until 23:00 UTC, entries blocked.
+  - 28 books at starting equity; demo account unchanged (3,000 USD, 0 positions/orders).
+- **BTC/USDT:**
+  - Heartbeats `ok`, WebSocket connected (~125k messages, 0 reconnects).
+  - REST fallback exercised live (05:47:15 → back to WebSocket in 3.7 s).
+  - One 141 s heartbeat gap (05:50:37–05:52:58) while data kept streaming. Its heartbeat is written by the main
+    loop, so it pauses when a REST call is slow. Follow-up: a heartbeat thread like XAUUSD's (needs a BTC restart;
+    deferred).
+- **Combined health report** (`research/output/health/health_20261108T0601Z.md`, last hour):
+  - XAUUSD 84% runner uptime (the 05:06 termination); alerts are the two intentional STOPs.
+  - BTC 100% uptime, fresh data 100%, no alerts.
+  - Pre-registration consistent for both.
+
+### Safety
+- Risk limits unchanged (0.5% / 1.5% / 1%; hard 0.5% ceiling).
+- No order path: MT5 proxy blocks all order helpers; Binance is market data plus a testnet-only account GET; testnet
+  `submit()` refuses.
+- Frozen parameters and pre-registration hashes unchanged; no simulated account reset.
+- Process-termination auditing **not** enabled (as instructed).
+
+### Tests
+`pytest -q tests --ignore=tests/test_kronos_regression.py` → **424 passed, 8 deselected** (Python 3.11.18); ruff
+clean.
 
 ---
 
