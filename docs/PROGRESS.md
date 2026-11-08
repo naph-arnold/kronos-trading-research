@@ -531,5 +531,50 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Multi-timeframe hybrid research (2026-11-08)
+
+Branch `research/mtf-hybrid` (worktree `../kronos-mtf-research`, based on PR #14). Research only. The running
+XAUUSD/BTC shadow runners, their parameters, pre-registrations, state and accounts are unchanged; both kept 60 s
+heartbeats during the research load. Details: `docs/mtf-hybrid-research.md`.
+
+### Implemented
+- `trading/mtf/`: causal resampling and alignment, formally defined features, Strategy A/B, matched random and
+  trend baselines, an event simulator using the unchanged risk engine, hybrid rules, and advisory interfaces
+  (recorded only; Grok inactive).
+- `research/mtf_research.py` (walk-forward, baselines, cost scenarios, halts, eligibility, regimes/sessions,
+  hybrid comparison); `research/binance_bulk.py` (official bulk archives, SHA-256 verified).
+- Data: BTC 5m 2019→2026-05 and 1m 2023→2026-05 (bulk archives); XAUUSD M5 from 2025-06 and M1 from 2026-07
+  (MT5 read-only; capped by the terminal's 100,000-bar setting).
+- Tests: `tests/test_mtf_framework.py` (20).
+
+### Results (out-of-sample walk-forward; net of costs)
+- **BTC/USDT:**
+  - A (5m, 531 trades): −0.142 R (CI −0.237, −0.047).
+  - B (1m, 316 trades): −0.145 R.
+  - Hybrid: worse than A alone.
+  - Trend baseline: +0.115 R (CI includes 0).
+  - Fees (≈0.15 R per trade) exceed the gross edge.
+  - Verdict: **no credible advantage**.
+- **XAUUSD:**
+  - A, development (82 trades): +0.447 R, CI excludes 0, 20/20 random, 12/12 settings profitable.
+  - A, frozen parameters on 2026 (277 trades; exploratory, examined in Phase 2A): +0.109 R (CI −0.070, +0.290),
+    20/20 random, stress +8%.
+  - B: −0.029 R (costs > gross edge).
+  - Hybrid diluted by B.
+  - Verdict: **A promising but unproven**; B and C not justified.
+- Candidates on real XAUUSD data are identical with truncated vs full history (no look-ahead).
+
+### Blocked / open
+- The implementation brief referenced in the request was not attached.
+- XAUUSD lower-timeframe history is capped by the terminal "Max bars" setting (operator decision).
+- No order-book data for scalping fills.
+
+### Next step (proposal; needs approval)
+Pre-register an independent shadow forward test for XAUUSD Strategy A with frozen parameters (RR 2.5, pull_atr
+0.25, confirm_bars 6), in a separate state directory, without touching the running experiments. Optionally raise
+MT5 max bars first to validate on unexamined pre-2025-06 M5 data.
+
+---
+
 ## Update policy
 Only mark items done when code, tests or verifiable operational evidence exists. For every milestone add date, branch/commit, command/test results, blockers, and next step. Do not treat plans or historical conversation claims as verified implementation.

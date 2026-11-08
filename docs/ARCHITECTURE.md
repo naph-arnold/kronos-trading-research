@@ -109,6 +109,17 @@ providers (official/licensed, attributed)        market-specific rules          
   reset detection with no network code; submission raises until Phase 3 is authorized.
   Details: [phase2e-binance-shadow.md](phase2e-binance-shadow.md).
 
+## Multi-timeframe research framework (research only)
+- `trading/mtf/` builds higher timeframes from execution candles (UTC-aligned buckets) and exposes a higher-timeframe
+  candle only after it has closed. All structure features are formally defined and causal; prefix-invariance tests
+  guard against look-ahead.
+- Strategies emit candidates. The simulator sends every entry through the unchanged `trading.risk.evaluate`
+  (0.5% / 1% aggregate / daily 1.5% latch, sessions, blackouts, venue filters). Research halts can only add
+  restrictions. Hybrid conflicts are resolved deterministically under one account's limits.
+- Advisory inputs (Kronos, six Grok agents on the official xAI API, TradingView) are recorded only. The simulator
+  and risk engine cannot receive them, and live Grok calls are not activated.
+  Details: [mtf-hybrid-research.md](mtf-hybrid-research.md).
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.
