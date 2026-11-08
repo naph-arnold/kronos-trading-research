@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "purpose": "Six Grok reasoning agents, advisory only. NOT activated: activation needs this flag, an operator-chosen model, GROK_AGENTS_ACTIVATED=1, XAI_API_KEY in the environment and --i-have-activation-approval.",
+  "activated": false,
+  "model": null,
+  "base_url": "https://api.x.ai",
+  "timeout_s": 30,
+  "max_tokens": 800,
+  "daily_call_budget": 60,
+  "advisory_dir": "state/grok_advisory",
+  "runners": {
+    "xau_orb": {
+      "market": "xauusd_mt5",
+      "shadow_db": "state/phase2d_shadow/shadow.sqlite",
+      "calendar_db": "state/phase2d_shadow/calendar.sqlite"
+    },
+    "xau_selective_a": {
+      "market": "xauusd_mt5",
+      "shadow_db": "state/xau_selective_a_shadow/shadow.sqlite",
+      "calendar_db": "state/xau_selective_a_shadow/calendar.sqlite"
+    },
+    "btc_donchian": {
+      "market": "btcusdt_binance_spot",
+      "shadow_db": "state/phase2e_binance_shadow/shadow.sqlite"
+    }
+  }
+}

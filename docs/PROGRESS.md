@@ -531,6 +531,32 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Phase 4.1 — six Grok agents in advisory-only mode (2026-11-09)
+
+Branch `feat/phase4-grok-advisory`, stacked on `feat/xau-selective-a-shadow-prep`. Details:
+`docs/phase4-grok-advisory.md`. Consolidated status and plans: `docs/project-status-2026-11-09.md`.
+
+**Status: implemented and tested; NOT activated.** No xAI call has been made, no key has been configured and no
+model has been chosen. Kronos remains the only forecaster.
+
+- Implemented:
+  - `trading/agents/desk.py`: schema-v1 contracts for Scout, Chart, Kronos Analyst, Skeptic and Coordinator. News
+    reuses `trading/agents/news.py`. Controlled fields are rejected at any depth; evidence must come from the
+    context; the Coordinator fails closed to `insufficient_inputs`.
+  - `research/grok_advisory.py`: read-only shadow context (SQLite `mode=ro`, bars strictly before the signal);
+    calendar snapshot copy; separate store `state/grok_advisory/advisory.sqlite`; `dry-run` / `replay` / `xai`
+    transports. The `xai` transport is limited to the official endpoint, keeps the key in the environment only,
+    redacts it from errors and enforces a daily budget. Activation needs the config flag, an env flag and a CLI
+    approval flag.
+  - `research/configs/grok_advisory.json`: `activated: false`, `model: null`.
+- Verified:
+  - `tests/test_grok_advisory.py`: 27 passed.
+  - The existing AI-boundary guard test still passes.
+  - A read-only dry run against the running Phase 2D store reviewed 0 signals (none live yet); the calendar file
+    hash was unchanged.
+- The Phase 1 desk is marked legacy. Strategies, shadow engines and `trading.risk.evaluate` have no path from
+  agent output.
+
 ## Milestone: XAUUSD Selective Strategy A shadow validation prepared (2026-11-09)
 
 Branch `feat/xau-selective-a-shadow-prep` (based on `research/volume-profile`, PR #20, with `ops/dual-runner-reliability`,

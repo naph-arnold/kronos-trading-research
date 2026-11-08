@@ -1,5 +1,10 @@
 # Six-agent Kronos + Grok research desk (Phase 1)
 
+> **Legacy prototype (2026-11-09).** The Phase 4 advisory-only desk is `trading/agents/desk.py` +
+> `research/grok_advisory.py` ([phase4-grok-advisory.md](phase4-grok-advisory.md)). In the new desk agents can
+> only advise and their outputs are recorded separately. This Phase 1 prototype, where role verdicts gate paper
+> eligibility, is kept for reference and is not used by any runner.
+
 This code establishes **contracts and safety gates** for six agents. It does **not** create six Grok accounts, create an xAI group chat, connect to Grok's services, call news feeds, or place exchange orders.
 
 The six agent slots are:
