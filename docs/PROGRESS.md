@@ -499,7 +499,9 @@ New data: 42,300 hourly candles 2019-01 → 2023-10 (20 recorded exchange-outage
 
 ### Verified results
 - Tests (worktree, Python 3.11.18): `pytest -q tests --ignore=tests/test_kronos_regression.py` → **439 passed,
-  8 integration deselected** (415 before + 24 new in `tests/test_phase2e_binance_shadow.py`); ruff clean.
+  8 integration deselected** (415 before + 24 new in `tests/test_phase2e_binance_shadow.py`); ruff clean. GitHub
+  Actions on `007443b`: **435 passed**, ruff and pip-audit clean
+  ([run 42448295495](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42448295495)); PR #14.
 - Live smoke (public data): 2,380 warm-up candles, WebSocket quotes processed, all four calendars refreshed;
   restart reproduced 965 warm-up signals with 0 mismatches; KILL tripped the BTC breaker; STOP exited in 13 s.
 - Clock: local clock about 0.95 s ahead of Binance (within the 2 s tolerance). A 12.9 s reading turned out to
