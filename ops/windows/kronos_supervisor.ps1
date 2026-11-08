@@ -12,9 +12,9 @@
 #     breaker on every decision, so restarts cannot bypass it.
 #   * Keep-awake is scoped to this process (SetThreadExecutionState) and released on exit; no power-plan change.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet("xauusd", "btcusdt", "test")][string]$Name,
+    [Parameter(Mandatory = $true)][ValidateSet("xauusd", "btcusdt", "xauselectivea", "test")][string]$Name,
     [Parameter(Mandatory = $true)][string]$Repo,
-    [Parameter(Mandatory = $true)][string]$Module,       # research.phase2d_shadow | research.phase2e_binance_shadow
+    [Parameter(Mandatory = $true)][string]$Module,       # research.phase2d_shadow | research.phase2e_binance_shadow | research.xau_selective_a_shadow
     [Parameter(Mandatory = $true)][string]$StateDir,
     [string]$Python = "",
     [ValidateSet("none", "system", "display")][string]$KeepAwake = "system",

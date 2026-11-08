@@ -18,6 +18,7 @@ as unavailable -> Coordinator fallback `insufficient_inputs`); `replay` uses rec
 
 Usage: python -m research.grok_advisory review --db <shadow.sqlite> --runner xau_orb [--signal-id ID | --latest N]
        python -m research.grok_advisory status
+       python -m research.grok_advisory estimate-cost [--runner xau_orb --db <shadow.sqlite>]   (offline)
 """
 from __future__ import annotations
 
@@ -85,6 +86,7 @@ class XaiTransport:
             raise ValueError("An operator-chosen xAI model id is required")
         self.model, self.base_url, self.key_env = model, base_url, key_env
         self.timeout_s, self.max_tokens, self._open = timeout_s, max_tokens, opener
+        self.last_usage: dict | None = None
 
     def complete(self, role: str, system: str, user: str) -> str:
         key = os.environ.get(self.key_env, "")
@@ -100,6 +102,9 @@ class XaiTransport:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             raise GrokNotActivated(f"xAI request failed: {type(exc).__name__}: {str(exc).replace(key, '***')}") from None
+        usage = data.get("usage") if isinstance(data, dict) else None
+        self.last_usage = ({k: v for k, v in usage.items() if isinstance(v, (int, float))}
+                           if isinstance(usage, dict) else None)
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
@@ -116,6 +121,11 @@ def make_transport(config: dict, kind: str, *, approved: bool, env=os.environ, r
     if not (config.get("activated") is True and env.get("GROK_AGENTS_ACTIVATED") == "1" and approved):
         raise GrokNotActivated("Grok agents are not activated: config 'activated', GROK_AGENTS_ACTIVATED=1 and "
                                "--i-have-activation-approval are all required")
+    pricing = config.get("pricing_usd_per_million") or {}
+    if not all(isinstance(pricing.get(k), (int, float)) and pricing[k] > 0 for k in ("input", "output")) or not (
+            isinstance(config.get("daily_usd_budget"), (int, float)) and config["daily_usd_budget"] > 0):
+        raise GrokNotActivated("xAI pricing (input/output USD per million tokens, from docs.x.ai) and a positive "
+                               "daily_usd_budget must be set before activation")
     return XaiTransport(model=config.get("model") or "", base_url=config["base_url"],
                         timeout_s=config["timeout_s"], max_tokens=config["max_tokens"])
 
@@ -126,7 +136,8 @@ class AdvisoryStore:
     SCHEMA = (
         "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, role TEXT NOT NULL,"
         " subject TEXT NOT NULL, transport TEXT NOT NULL, model TEXT, context_sha256 TEXT NOT NULL,"
-        " prompt_sha256 TEXT NOT NULL, response_sha256 TEXT, status TEXT NOT NULL, error TEXT)",
+        " prompt_sha256 TEXT NOT NULL, response_sha256 TEXT, status TEXT NOT NULL, error TEXT,"
+        " est_cost_usd REAL, usage TEXT)",
         "CREATE TABLE IF NOT EXISTS outputs (subject TEXT NOT NULL, role TEXT NOT NULL, at TEXT NOT NULL,"
         " valid INTEGER NOT NULL, payload TEXT, error TEXT, PRIMARY KEY (subject, role, at))",
         "CREATE TABLE IF NOT EXISTS summaries (subject TEXT NOT NULL, at TEXT NOT NULL, runner TEXT NOT NULL,"
@@ -138,16 +149,28 @@ class AdvisoryStore:
         self.db = sqlite3.connect(str(path))
         for stmt in self.SCHEMA:
             self.db.execute(stmt)
+        columns = {r[1] for r in self.db.execute("PRAGMA table_info(calls)")}
+        for column, kind in (("est_cost_usd", "REAL"), ("usage", "TEXT")):  # stores created before cost tracking
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE calls ADD COLUMN {column} {kind}")
         self.db.commit()
 
     def calls_since(self, since: datetime, transport: str = "xai") -> int:
         return self.db.execute("SELECT COUNT(*) FROM calls WHERE at >= ? AND transport = ?",
                                (since.isoformat(), transport)).fetchone()[0]
 
+    def est_cost_since(self, since: datetime, transport: str = "xai") -> float:
+        return self.db.execute("SELECT COALESCE(SUM(est_cost_usd), 0) FROM calls WHERE at >= ? AND transport = ?",
+                               (since.isoformat(), transport)).fetchone()[0]
+
     def call(self, **row) -> None:
+        row = {"est_cost_usd": None, "usage": None, **row}
+        if isinstance(row["usage"], dict):
+            row["usage"] = json.dumps(row["usage"], sort_keys=True)
         self.db.execute("INSERT INTO calls (at, role, subject, transport, model, context_sha256, prompt_sha256,"
-                        " response_sha256, status, error) VALUES (:at, :role, :subject, :transport, :model,"
-                        " :context_sha256, :prompt_sha256, :response_sha256, :status, :error)", row)
+                        " response_sha256, status, error, est_cost_usd, usage) VALUES (:at, :role, :subject,"
+                        " :transport, :model, :context_sha256, :prompt_sha256, :response_sha256, :status, :error,"
+                        " :est_cost_usd, :usage)", row)
         self.db.commit()
 
     def output(self, subject: str, role: str, at: str, valid: bool, payload, error: str | None) -> None:
@@ -236,6 +259,25 @@ def calendar_snapshot(calendar_db: Path, workdir: Path):
     return EventStore(dest)
 
 
+# --------------------------------------------------------------------------- cost control
+
+CHARS_PER_TOKEN = 3.0  # conservative for JSON-heavy prompts (numbers and punctuation tokenize densely)
+CALLS_PER_REVIEW = len(SPECIALISTS) + 1
+
+
+def estimate_tokens(text: str) -> int:
+    return int(len(text) / CHARS_PER_TOKEN) + 1
+
+
+def call_cost_usd(input_tokens: int, output_tokens: int, pricing: dict) -> float:
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+
+def worst_case_call_cost(system: str, user: str, max_tokens: int, pricing: dict) -> float:
+    """Upper bound used by the daily USD guard: estimated prompt tokens plus the full max_tokens of output."""
+    return call_cost_usd(estimate_tokens(system + user), max_tokens, pricing)
+
+
 # --------------------------------------------------------------------------- desk
 
 def _prompt(role: str, context: AdvisoryContext, extra: dict | None = None) -> tuple[str, str]:
@@ -261,25 +303,44 @@ def _news_as_role_output(n) -> RoleOutput:
 
 
 def run_desk(context: AdvisoryContext, transport, store: AdvisoryStore, *, runner: str, now: datetime,
-             model: str | None, event_store=None, daily_call_budget: int = 0) -> dict:
+             model: str | None, event_store=None, daily_call_budget: int = 0, daily_usd_budget: float = 0.0,
+             pricing: dict | None = None) -> dict:
     """Ask the five specialists, then the Coordinator. Every output is validated; failures are recorded and the
     Coordinator falls back to `insufficient_inputs`. Returns the recorded summary (advisory only)."""
     context_sha = context.digest()
     at = now.isoformat()
     valid: dict[str, RoleOutput] = {}
     errors: dict[str, str] = {}
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    paid = transport.name == "xai"
+    if paid and store.calls_since(day) + CALLS_PER_REVIEW > daily_call_budget:
+        # all-or-nothing: never start a review the call budget cannot finish
+        errors = {r: "daily call budget cannot cover a full review; not started" for r in SPECIALISTS}
+        summary = deterministic_coordinator_fallback(context, {}, errors, now=now)
+        summary.update(specialists={}, errors=errors, skipped="budget")
+        store.summary(context.subject_id, at, runner, context_sha, summary)
+        return summary
 
     def ask(role: str, extra: dict | None = None):
         system, user = _prompt(role, context, extra)
         row = {"at": at, "role": role, "subject": context.subject_id, "transport": transport.name, "model": model,
                "context_sha256": context_sha, "prompt_sha256": hashlib.sha256((system + user).encode()).hexdigest(),
                "response_sha256": None, "status": "ok", "error": None}
-        if transport.name == "xai":
-            day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if paid:
+            if pricing is None:
+                row.update(status="skipped", error="no pricing configured (fail closed)")
+                store.call(**row)
+                return None, "no pricing configured"
+            worst = worst_case_call_cost(system, user, transport.max_tokens, pricing)
             if store.calls_since(day) >= daily_call_budget:
                 row.update(status="skipped", error="daily call budget reached")
                 store.call(**row)
                 return None, "daily call budget reached"
+            if store.est_cost_since(day) + worst > daily_usd_budget:
+                row.update(status="skipped", error="daily USD budget reached")
+                store.call(**row)
+                return None, "daily USD budget reached"
+            row["est_cost_usd"] = worst
         try:
             text = transport.complete(role, system, user)
         except GrokNotActivated as exc:
@@ -287,6 +348,11 @@ def run_desk(context: AdvisoryContext, transport, store: AdvisoryStore, *, runne
             store.call(**row)
             return None, f"unavailable: {exc}"[:300]
         row["response_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+        usage = getattr(transport, "last_usage", None)
+        if paid and usage and pricing is not None:
+            row["usage"] = usage
+            row["est_cost_usd"] = max(row["est_cost_usd"] or 0.0, call_cost_usd(
+                int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)), pricing))
         store.call(**row)
         try:
             return json.loads(text), None
@@ -351,11 +417,94 @@ def cmd_review(args) -> dict:
         for sig in recent_signals(db, limit=args.latest, signal_id=args.signal_id):
             ctx = signal_context(db, sig, runner=args.runner, market=runner["market"], now=now, kronos=kronos)
             out.append(run_desk(ctx, transport, store, runner=args.runner, now=now, model=config.get("model"),
-                                event_store=events, daily_call_budget=config["daily_call_budget"]))
+                                event_store=events, daily_call_budget=config["daily_call_budget"],
+                                daily_usd_budget=float(config.get("daily_usd_budget") or 0),
+                                pricing=config.get("pricing_usd_per_million")))
         if events is not None:
             events._db.close()
     return {"transport": transport.name, "reviewed": len(out),
             "recommendations": [s["recommendation"] for s in out], "store": store.counts()}
+
+
+def representative_context(db: Path | None, *, runner: str, market: str, now: datetime, bars: int = 96):
+    """A full-size context for cost estimation: the latest `bars` bars of a shadow store (read-only) and a
+    placeholder signal with one decision per book. No AI call; nothing is recorded."""
+    rows = []
+    if db is not None and Path(db).exists():
+        con = _ro(Path(db))
+        try:
+            rows = con.execute("SELECT open_time, open, high, low, close, interval FROM bars ORDER BY open_time DESC "
+                               "LIMIT ?", (bars,)).fetchall()[::-1]
+            books = [r[0] for r in con.execute("SELECT book_id FROM books ORDER BY book_id")]
+        finally:
+            con.close()
+    else:
+        books = [f"book{i}" for i in range(24)]
+    if not rows:
+        rows = [(f"2026-01-01T00:{i:02d}:00+00:00", 4000.0, 4001.5, 3998.5, 4000.25, "5m") for i in range(bars)]
+    close = rows[-1][0]
+    bar_facts = [{"id": f"bar:{r[0]}", "open_time": r[0], "o": float(r[1]), "h": float(r[2]), "l": float(r[3]),
+                  "c": float(r[4]), "interval": r[5]} for r in rows]
+    decisions = [{"id": f"decision:{b}:estimate", "book": b, "approved": False,
+                  "reasons": ["Planned risk exceeds the per-trade limit (example reason text of typical length)"]}
+                 for b in books]
+    sig = {"id": "signal:estimate", "strategy_key": "estimate", "side": "long", "bar_close": close,
+           "status": "forward", "note": "Frozen strategy signal; its decisions were taken by the deterministic "
+                                        "risk engine."}
+    prices = [b["h"] for b in bar_facts] + [b["l"] for b in bar_facts]
+    return AdvisoryContext(subject_kind="signal", subject_id=f"{runner}:estimate", market=market, as_of=now,
+                           evidence_ids=frozenset([sig["id"]] + [b["id"] for b in bar_facts]
+                                                  + [d["id"] for d in decisions]),
+                           price_range=(min(prices), max(prices)), facts={
+                               "signal": sig, "bars": bar_facts, "decisions": decisions, "kronos_forecasts": [],
+                               "advisory_generated_at": now.isoformat()})
+
+
+def estimate_review_cost(context: AdvisoryContext, *, pricing: dict, max_tokens: int,
+                         typical_output_tokens: int = 350, frequencies=(1, 3, 6, 24, 96)) -> dict:
+    """Token and USD estimate for one six-agent review (5 specialists + Coordinator) and for several review
+    frequencies. Input tokens = prompt chars / CHARS_PER_TOKEN (conservative); output: typical and worst case
+    (max_tokens per call; reasoning tokens, if a reasoning model is used, count as output and are NOT included in
+    the typical figure)."""
+    filler = {"assessment": "x" * 600, "evidence": ["bar:x"] * 5, "concerns": ["y" * 80] * 3, "confidence": 0.5,
+              "recommendation": "caution", "valid_for_minutes": 60}
+    per_role = {}
+    for role in SPECIALISTS:
+        system, user = _prompt(role, context)
+        per_role[role] = estimate_tokens(system + user)
+    system, user = _prompt("coordinator", context, {"validated_specialist_outputs": {r: filler for r in SPECIALISTS}})
+    per_role["coordinator"] = estimate_tokens(system + user)
+    tokens_in = sum(per_role.values())
+    typical = call_cost_usd(tokens_in, typical_output_tokens * CALLS_PER_REVIEW, pricing)
+    worst = call_cost_usd(tokens_in, max_tokens * CALLS_PER_REVIEW, pricing)
+    return {"calls_per_review": CALLS_PER_REVIEW, "input_tokens_per_role": per_role,
+            "input_tokens_per_review": tokens_in, "typical_output_tokens_per_call": typical_output_tokens,
+            "max_tokens_per_call": max_tokens, "pricing_usd_per_million": pricing,
+            "usd_per_review": {"typical": round(typical, 4), "worst_case": round(worst, 4)},
+            "per_frequency": {f"{n}_reviews_per_day": {
+                "calls_per_day": n * CALLS_PER_REVIEW,
+                "usd_per_day": [round(n * typical, 2), round(n * worst, 2)],
+                "usd_per_30_days": [round(30 * n * typical, 2), round(30 * n * worst, 2)]} for n in frequencies}}
+
+
+def cmd_estimate_cost(args) -> dict:
+    """Offline estimate (no AI call, no store written)."""
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    runner = config["runners"][args.runner]
+    db = Path(args.db or runner["shadow_db"])
+    ctx = representative_context(db, runner=args.runner, market=runner["market"], now=datetime.now(timezone.utc))
+    out = {}
+    for model, (pin, pout) in sorted(PRICE_SCENARIOS.items()):
+        out[model] = estimate_review_cost(ctx, pricing={"input": pin, "output": pout},
+                                          max_tokens=config["max_tokens"])
+    return {"source_db": str(db), "bars_in_context": len(ctx.facts["bars"]), "decisions_in_context":
+            len(ctx.facts["decisions"]), "price_source": PRICE_SOURCE, "estimates": out}
+
+
+# Published list prices (USD per million tokens, < 200k-token prompts), docs.x.ai/docs/models, retrieved
+# 2026-11-09. Planning figures only: re-check at activation; the config's pricing is what the guard enforces.
+PRICE_SOURCE = "https://docs.x.ai/docs/models (retrieved 2026-11-09; re-verify at activation)"
+PRICE_SCENARIOS = {"grok-4.20-0309-non-reasoning": (1.25, 2.50), "grok-4.3": (1.25, 2.50), "grok-4.7": (2.00, 6.00)}
 
 
 def cmd_status(args) -> dict:
@@ -382,7 +531,11 @@ def main() -> None:
     p.set_defaults(func=cmd_review)
     s = sub.add_parser("status")
     s.set_defaults(func=cmd_status)
-    for q in (p, s):
+    e = sub.add_parser("estimate-cost", help="offline token/USD estimate; no AI call")
+    e.add_argument("--runner", default="xau_orb")
+    e.add_argument("--db", default=None, help="shadow.sqlite to size the context from (read-only)")
+    e.set_defaults(func=cmd_estimate_cost)
+    for q in (p, s, e):
         q.add_argument("--config", default=DEFAULT_CONFIG)
         q.add_argument("--advisory-dir", default=None)
     args = parser.parse_args()

@@ -7,6 +7,9 @@
   "timeout_s": 30,
   "max_tokens": 800,
   "daily_call_budget": 60,
+  "daily_usd_budget": null,
+  "pricing_usd_per_million": {"input": null, "output": null, "source": "https://docs.x.ai/docs/models",
+                              "note": "Set from the official price list for the chosen model at activation. The xai transport refuses to start without input/output prices and a positive daily_usd_budget."},
   "advisory_dir": "state/grok_advisory",
   "runners": {
     "xau_orb": {

@@ -97,3 +97,37 @@ See `docs/phase4-grok-advisory.md` section 6:
   - MT5 "Max bars" setting, to allow unexamined pre-2025 M5 history;
   - commission confirmation;
   - CPI/NFP re-check before 2027-11.
+
+## 8. Update: readiness and verification milestone (2026-11-08 23:30 UTC)
+Branch `ops/xau-selective-a-readiness` (stacked on #22). Details are in `docs/PROGRESS.md`,
+`docs/xau-selective-a-shadow.md` (sections 6–7) and `docs/phase4-grok-advisory.md` (section 7).
+
+**Runner status after the gold open:**
+- XAU: `broker_verified` at 23:02; data fresh and entries allowed from 23:15.
+- BTC: healthy.
+- Neither runner was touched.
+
+**Strategy A:**
+- The MT5 preflight **passed** (read-only proxy confirmed; Phase 2D undisturbed).
+- Restart recovery verified on live data.
+- Task script and health report are prepared.
+- **Not launched; task not registered.**
+
+**Grok:**
+- Verified in dry-run and replay.
+- USD ceiling and usage tracking added.
+- Recommended model: `grok-4.20-0309-non-reasoning`, at about $2–6 per month when reviewing only candidate-strategy
+  signals.
+- **Not activated.**
+
+**Revised merge plan.** Conflict-free order, simulated on a throwaway worktree:
+
+`#9 → #10 → #11 → #12 → #13 → #15 → #16 → #21 → #22 → #23`
+
+- #21 contains #14 and #17–#20 plus the tested resolution of the #14 / #16 overlap (`ci.yml`, `PROGRESS.md`).
+- After #21 merges, retarget #14 and #17–#20 to `master`. They should show no remaining diff and be marked merged;
+  otherwise close them with a reference to #21.
+- **Alternative:** keep one merge per PR (#14 → #17 → #18 → #19 → #20 after #13, then #15/#16). This needs a manual
+  union resolution of `docs/PROGRESS.md` and `.github/workflows/ci.yml`, identical to merge commit `9c17c3f`.
+- Use merge commits, not squash.
+- Do not switch the runner checkouts.

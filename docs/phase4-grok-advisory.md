@@ -87,9 +87,13 @@ strategies ─> signals ─> trading.risk.evaluate ─> simulated fills     (no 
   running and prepared forward tests.
 
 ## 5. Activation procedure (operator approval required)
-1. Approve paid xAI usage and a daily budget.
-2. Choose the model id. Set `"activated": true` and `"model"` in `research/configs/grok_advisory.json` in a
-   reviewed commit.
+1. Approve paid xAI usage, a daily call budget and a daily USD ceiling.
+2. In a reviewed commit to `research/configs/grok_advisory.json`:
+   - choose the model id (section 7), and set `"activated": true` and `"model"`;
+   - set `pricing_usd_per_million.input` and `.output` from the official price list for that model;
+   - set a positive `daily_usd_budget`.
+
+   The `xai` transport refuses to start without the prices and the USD ceiling.
 3. Store `XAI_API_KEY` outside Git, using a user-scoped environment variable or a secrets store. Set
    `GROK_AGENTS_ACTIVATED=1`.
 4. Run
@@ -106,3 +110,55 @@ strategies ─> signals ─> trading.risk.evaluate ─> simulated fills     (no 
 | 4.4 | Scheduled advisory reviews of new shadow signals. These run in a separate process with its own task and state. The heartbeat/health report covers it. | Approval of Task Scheduler change |
 | 4.5 | Evaluation: are advisory recommendations informative? | Compare `caution`/`avoid` against the realised R of the frozen shadow trades, after ≥ 100 reviewed signals. Pre-register the comparison before looking. |
 | 4.6 | Any use of advice in decisions (for example an opt-in `advisory_guard` that only adds restrictions) | A **new** pre-registered experiment. Never retrofitted into a running forward test |
+
+## 7. Verification milestone (2026-11-08; dry-run and replay only, no paid call)
+| Requirement | Evidence |
+| --- | --- |
+| Six distinct roles | `ROLES` and `ROLE_BRIEFS` hold six different briefs (`test_six_roles_are_distinct_and_only_kronos_forecasts`). News keeps its own calendar contract. |
+| Official xAI API only | `XaiTransport` accepts only `https://api.x.ai` and rejects other hosts and look-alike hosts. Every output must name the official provider (`test_xai_transport_requires_every_activation_step`, `test_invalid_or_overreaching_outputs_are_rejected`). |
+| Kronos remains the forecaster | The Kronos Analyst may only cite a supplied, recorded forecast id. Without one it must give `no_view`; its brief says it does not forecast. |
+| Invalid or missing responses fail safe | Dry run → every role unavailable → deterministic fallback `insufficient_inputs`. A controlled field (for example `stop_loss`) rejects the output. A missing News snapshot is rejected. |
+| No influence on frozen strategies or risk | Shadow stores are opened `mode=ro` and stay byte-identical. The runners, `trading/shadow/*` and `trading/risk.py` do not import the agents (guard test). |
+| Secrets | The key is read at call time and redacted from errors (test). A scan of tracked files, git history and the runners' state/log directories on 2026-11-08 found no API keys. `XAI_API_KEY` is not set on this machine. |
+| Cost controls | **Added in this milestone:**<ul><li>a review starts only if the daily call budget can cover all 6 calls;</li><li>a daily USD ceiling uses the worst-case cost per call (prompt tokens + `max_tokens`);</li><li>the token usage reported by the API is stored per call;</li><li>activation needs prices and a ceiling;</li><li>older stores are migrated.</li></ul> |
+
+**Review findings fixed here (PR #22 follow-up):**
+- The call budget could run out in the middle of a review. That was safe, because of the fallback, but wasteful.
+- There was no dollar ceiling.
+- Actual token usage was not recorded.
+
+**Measured prompt size (offline, `python -m research.grok_advisory estimate-cost`):**
+- The context is the latest 96 bars plus the decisions of all 28 Phase 2D books, read only from the live Phase 2D
+  store.
+- About 7,350 input tokens per specialist and about 9,100 for the Coordinator: about 45,900 per six-call review.
+- Tokens are estimated as characters ÷ 3, which is conservative.
+- Output assumption: 350 tokens per call typical; the worst case is the full `max_tokens` of 800.
+
+**Estimated cost.** List prices are from docs.x.ai/docs/models, retrieved 2026-11-09 (for prompts under 200k
+tokens); re-check them at activation. Each cell shows the typical and the worst-case figure.
+
+| Reviews per day (calls) | grok-4.20-0309-non-reasoning ($1.25 / $2.50 per M) | grok-4.7 ($2.00 / $6.00 per M) |
+| --- | --- | --- |
+| Per review (6) | $0.063 / $0.069 | $0.105 / $0.121 |
+| 1 (6) | $1.9 / $2.1 per 30 days | $3.1 / $3.6 per 30 days |
+| 3 (18) | $5.6 / $6.3 per 30 days | $9.4 / $10.9 per 30 days |
+| 6 (36) | $11.3 / $12.5 per 30 days | $18.8 / $21.7 per 30 days |
+| 24, hourly (144) | $45 / $50 per 30 days | $75 / $87 per 30 days |
+| 96, every 15 min (576) | $180 / $200 per 30 days | $301 / $348 per 30 days |
+
+**Recommendation:**
+- **Model: `grok-4.20-0309-non-reasoning`.**
+  - It is a dated snapshot, so outputs are reproducible and the model cannot change silently under a fixed id.
+  - It does no hidden reasoning, so the 800-token `max_tokens` is not consumed by reasoning tokens (which are
+    billed as output).
+  - It is in the lowest published price tier, with a 1M-token context.
+  - JSON-object output with this exact model must be confirmed in the activation smoke test (step 4.3). The models
+    page does not list structured-output support per model.
+- **Upgrade path:** `grok-4.7` for the Skeptic and Coordinator only, if the evaluation in 4.5 shows the cheaper
+  model's advice is uninformative.
+- **Frequency:** review each new forward-test **signal** of the candidate strategies only, not the random controls.
+  - That is about 1–3 reviews per day across the ORB and Strategy A, roughly $2–6 per month.
+  - Keep `daily_call_budget` at 60, which caps reviews at 10 per day.
+  - Set `daily_usd_budget` to $1.00, a hard ceiling of about $30 per month even if signals cluster.
+  - Periodic market briefs (hourly or every 15 minutes) are not needed for advisory evaluation; they would cost
+    $45–200 per month and are not recommended.

@@ -136,8 +136,15 @@ def test_xai_transport_requires_every_activation_step():
         with pytest.raises(GrokNotActivated):
             make_transport(config, "xai", approved=approved, env=e)
     with pytest.raises(ValueError, match="model"):
-        make_transport({**cfg, "activated": True}, "xai", approved=True, env=env)
-    t = make_transport({**cfg, "activated": True, "model": "grok-test"}, "xai", approved=True, env=env)
+        make_transport({**cfg, "activated": True, "daily_usd_budget": 1.0,
+                        "pricing_usd_per_million": {"input": 1.25, "output": 2.5}}, "xai", approved=True, env=env)
+    with pytest.raises(GrokNotActivated, match="pricing"):  # cost controls are part of activation
+        make_transport({**cfg, "activated": True, "model": "grok-test"}, "xai", approved=True, env=env)
+    priced = {**cfg, "activated": True, "model": "grok-test", "daily_usd_budget": 1.0,
+              "pricing_usd_per_million": {"input": 1.25, "output": 2.5}}
+    with pytest.raises(GrokNotActivated, match="pricing"):
+        make_transport({**priced, "daily_usd_budget": 0}, "xai", approved=True, env=env)
+    t = make_transport(priced, "xai", approved=True, env=env)
     assert isinstance(t, XaiTransport) and isinstance(make_transport(cfg, "dry-run", approved=False), DryRunTransport)
     with pytest.raises(ValueError, match="official xAI"):
         XaiTransport(model="m", base_url="https://api.openai.com")
@@ -223,16 +230,75 @@ def test_invalid_or_missing_outputs_fall_back_to_insufficient_inputs(tmp_path):
     assert "no verified calendar" in bad["errors"]["news"]
 
 
-def test_daily_call_budget_caps_live_calls(tmp_path, monkeypatch):
+PRICING = {"input": 1.25, "output": 2.5}
+
+
+class UsageOpener(FakeOpener):
+    def __call__(self, req, timeout):
+        self.requests.append(req)
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": self.content}}],
+                                      "usage": {"prompt_tokens": 1000, "completion_tokens": 200}}).encode())
+
+
+def test_daily_call_budget_never_starts_a_review_it_cannot_finish(tmp_path, monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "k")
     ctx = _ctx(tmp_path)
     opener = FakeOpener(content=json.dumps(payload("scout")))
     t = XaiTransport(model="grok-test", opener=opener)
     store = AdvisoryStore(tmp_path / "a.sqlite")
-    run_desk(ctx, t, store, runner="xau_orb", now=NOW, model="grok-test", daily_call_budget=2)
-    assert len(opener.requests) == 2
-    statuses = [r[0] for r in store.db.execute("SELECT status FROM calls ORDER BY id")]
-    assert statuses[:2] == ["ok", "ok"] and set(statuses[2:]) == {"skipped"}
+    summary = run_desk(ctx, t, store, runner="xau_orb", now=NOW, model="grok-test", daily_call_budget=5,
+                       daily_usd_budget=10.0, pricing=PRICING)
+    assert opener.requests == [] and summary["recommendation"] == "insufficient_inputs"
+    assert summary["skipped"] == "budget" and store.counts()["summaries"] == {"insufficient_inputs": 1}
+
+
+def test_daily_usd_budget_and_missing_pricing_stop_paid_calls(tmp_path, monkeypatch):
+    from research.grok_advisory import _prompt, worst_case_call_cost
+    monkeypatch.setenv("XAI_API_KEY", "k")
+    ctx = _ctx(tmp_path)
+    opener = UsageOpener(content=json.dumps(payload("scout")))
+    t = XaiTransport(model="grok-test", opener=opener, max_tokens=800)
+    one = worst_case_call_cost(*_prompt("scout", ctx), 800, PRICING)
+    store = AdvisoryStore(tmp_path / "a.sqlite")
+    run_desk(ctx, t, store, runner="xau_orb", now=NOW, model="grok-test", daily_call_budget=60,
+             daily_usd_budget=one * 2.5, pricing=PRICING)
+    assert len(opener.requests) == 2  # the third call would exceed the USD ceiling
+    rows = store.db.execute("SELECT status, error, est_cost_usd, usage FROM calls ORDER BY id").fetchall()
+    assert [r[0] for r in rows[:2]] == ["ok", "ok"] and {r[1] for r in rows[2:]} == {"daily USD budget reached"}
+    assert json.loads(rows[0][3]) == {"completion_tokens": 200, "prompt_tokens": 1000} and rows[0][2] >= one * 0.9
+    assert store.est_cost_since(NOW.replace(hour=0)) <= one * 2.5
+    unpriced = AdvisoryStore(tmp_path / "b.sqlite")
+    run_desk(ctx, t, unpriced, runner="xau_orb", now=NOW, model="grok-test", daily_call_budget=60,
+             daily_usd_budget=10.0, pricing=None)
+    assert len(opener.requests) == 2 and {r[0] for r in unpriced.db.execute("SELECT status FROM calls")} == {"skipped"}
+
+
+def test_cost_estimate_is_offline_and_covers_six_calls(tmp_path):
+    from research.grok_advisory import CALLS_PER_REVIEW, estimate_review_cost, representative_context
+    db = _shadow_db(tmp_path)
+    before = _sha(db)
+    ctx = representative_context(db, runner="xau_orb", market="xauusd_mt5", now=NOW)
+    est = estimate_review_cost(ctx, pricing=PRICING, max_tokens=800)
+    assert CALLS_PER_REVIEW == 6 and set(est["input_tokens_per_role"]) == {*SPECIALISTS, "coordinator"}
+    assert 0 < est["usd_per_review"]["typical"] <= est["usd_per_review"]["worst_case"]
+    assert est["per_frequency"]["24_reviews_per_day"]["calls_per_day"] == 144
+    assert _sha(db) == before
+    fallback = representative_context(tmp_path / "missing.sqlite", runner="x", market="m", now=NOW)
+    assert len(fallback.facts["bars"]) == 96
+
+
+def test_advisory_store_migrates_calls_table_without_cost_columns(tmp_path):
+    path = tmp_path / "old.sqlite"
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE calls (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, role TEXT NOT NULL,"
+                " subject TEXT NOT NULL, transport TEXT NOT NULL, model TEXT, context_sha256 TEXT NOT NULL,"
+                " prompt_sha256 TEXT NOT NULL, response_sha256 TEXT, status TEXT NOT NULL, error TEXT)")
+    con.commit()
+    con.close()
+    store = AdvisoryStore(path)
+    store.call(at=NOW.isoformat(), role="scout", subject="s", transport="xai", model="m", context_sha256="c",
+               prompt_sha256="p", response_sha256=None, status="ok", error=None, est_cost_usd=0.01)
+    assert store.est_cost_since(NOW.replace(hour=0)) == pytest.approx(0.01)
 
 
 def test_frozen_runners_and_risk_engine_do_not_import_the_agents():
@@ -244,3 +310,11 @@ def test_frozen_runners_and_risk_engine_do_not_import_the_agents():
         assert "grok_advisory" not in text and "trading.agents" not in text, path
     desk = (ROOT / "trading/agents/desk.py").read_text(encoding="utf-8")
     assert not any(t in desk for t in ("urlopen", "import requests", "import httpx", "openai", "anthropic"))
+
+
+def test_six_roles_are_distinct_and_only_kronos_forecasts():
+    from trading.agents.desk import ROLE_BRIEFS, ROLES
+    assert ROLES == ("scout", "news", "chart", "kronos_analyst", "skeptic", "coordinator")
+    assert set(ROLE_BRIEFS) == set(ROLES) and len(set(ROLE_BRIEFS.values())) == 6
+    assert "You do not forecast" in ROLE_BRIEFS["kronos_analyst"]
+    assert "cannot veto" in ROLE_BRIEFS["skeptic"] and "cannot approve" in ROLE_BRIEFS["coordinator"]

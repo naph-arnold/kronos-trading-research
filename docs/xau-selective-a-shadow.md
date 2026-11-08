@@ -28,8 +28,12 @@ Strategy A is the only multi-timeframe configuration with supporting evidence (`
 | Runner | `SelectiveARunner` | Subclass of the hardened Phase 2D runner: heartbeat thread, read-only allowlist MT5 proxy, demo-account check, broker-verified sessions, CPI/NFP/FOMC guards, restart-safe store. Uses M5 bars. `start` and `poll` are mirrored so `research/phase2d_shadow.py` stays unchanged. |
 | Pre-registration | `research/forward_test/xau_selective_a_preregistration.json` | Frozen parameters, controls, rules and criteria (section 4). |
 | Config | `research/configs/xau_selective_a_shadow.json` | Own state directory `state/xau_selective_a_shadow`, and `launch_approved: false`. |
-| Launch gate | `run` subcommand | Refuses to start without `--i-have-launch-approval`. |
-| Tests | `tests/test_xau_selective_a_shadow.py` | 13 tests, all on synthetic data (section 5). |
+| Launch gate | `run` subcommand | Refuses to start without launch approval: `--i-have-launch-approval`, or `"launch_approved": true` in the reviewed config (the form the supervisor uses). |
+| Single instance | `StateLock` (`<state>/runner.lock`) | One Strategy A process per state directory, whoever starts it. The supervisor's mutex and running-runner scan are a second layer. |
+| Preflight | `preflight` subcommand | One-off, operator-approved MT5 compatibility test on a scratch state: start, warm-up, one poll, disconnect, restart. It refuses runner state directories, non-empty directories, a second Strategy A process and an unhealthy Phase 2D heartbeat. Results are in section 7. |
+| Task Scheduler | `ops/windows/selective_a_task.ps1` | Dry run by default. `-Apply` refuses unless the dedicated checkout exists, its config says `launch_approved: true` and the pre-registration hash matches. Not registered. |
+| Health report | `research/dual_health_report.py` | Optional third market `xauusd_selective_a`, reported as "not started" until its state exists. |
+| Tests | `tests/test_xau_selective_a_shadow.py` | 19 tests, all on synthetic data (section 5). |
 
 **Frozen parameters:**
 - `SelectiveParams(reward_to_risk=2.5, pull_atr=0.25, confirm_bars=6)`; every other field at the research
@@ -57,8 +61,13 @@ Strategy A is the only multi-timeframe configuration with supporting evidence (`
 - **Signal window:** recomputed over a trailing 60-day window rather than the full history.
   - On examined 2025-08 → 2025-09 data the adapter reproduced the research candidates exactly (181/181).
   - This is a mechanics check only, not evidence.
-- **Start-up time:** the first start replays warm-up M5 bars from 2026-09-01 (about 3 minutes of CPU). A restart
-  replays every stored bar (about 10 minutes after a year). The heartbeat thread keeps writing throughout.
+- **Start-up time (measured 2026-11-08, section 7):**
+  - The first start loads and replays the warm-up M5 bars from 2026-09-01 (12,957 bars): 126 s.
+  - A restart replays every stored bar at about 13–15 ms per bar: 168 s for 12,957 bars. Projected: about
+    17–18 minutes after a year, and about 26 minutes at the 548-day hard end.
+  - The heartbeat thread keeps writing throughout.
+  - **No new signal is acted on during a restart.** The decision-latency guard rejects late fills, so a long
+    restart costs opportunities but cannot create stale entries.
 
 ## 4. Pre-registered evaluation
 Primary book: 10,000 USD, 7 USD/lot round-trip commission.
@@ -93,7 +102,7 @@ Calculation: `selective_a_criteria`. Run it with `python -m research.xau_selecti
 another candidate.
 
 ## 5. Verification
-`tests/test_xau_selective_a_shadow.py` contains 13 tests, all on synthetic data:
+`tests/test_xau_selective_a_shadow.py` contains 19 tests, all on synthetic data:
 - adapter parity with the research generator, bar by bar;
 - signal price rounding and target;
 - interval and window guards;
@@ -106,7 +115,13 @@ another candidate.
 - no order or AI calls;
 - runner start, M5 polling, 24 books, heartbeats, and restart without signal mismatch or breaker trip;
 - no verdict before the final checkpoint;
-- the frozen random calibration.
+- the frozen random calibration;
+- the state lock refuses a second process;
+- launch approval only through the flag or the reviewed config;
+- preflight guards: approval, runner and non-empty state directories refused;
+- the preflight warm-up, poll and restart on a scratch state, with the peer store byte-identical;
+- the connector probe blocks every write function;
+- KILL and STOP live in Strategy A's own state directory: KILL blocks entries, STOP prevents a start.
 
 **Separate parity check:** on real examined 2025-08 → 2025-09 M5 data, 181/181 candidates were identical. The script
 is in the session scratchpad and is not repository evidence.
@@ -115,19 +130,63 @@ is in the session scratchpad and is not repository evidence.
 | # | Item | Status |
 | --- | --- | --- |
 | 1 | Operator approves launching a third runner | **Pending** |
-| 2 | PR #16 runner code (heartbeat thread, adopt-mode supervisor) is in the deployed checkout. This branch contains it via a merge. | Code ready; deployment pending |
-| 3 | **MT5 multi-client check:** one short `run --once` probe with approval, while the Phase 2D heartbeat is monitored. It shows that a third read-only process can attach to the same terminal without disturbing the ORB runner. | **Not done** (it touches the terminal, so it needs approval) |
-| 4 | **Memory headroom:** at least 1.5 GB free with all three runners. On 2026-11-08 at 20:50 UTC free memory was 1.40 GB with two runners plus research jobs. | **Not met yet**; re-check with no research jobs running |
-| 5 | Supervisor task for module `research.xau_selective_a_shadow` (copy of the Phase 2D Task Scheduler entry, own STOP file). This changes Task Scheduler. | Prepared in docs only; not installed |
-| 6 | Extend `research/dual_health_report.py` to cover the third state directory | Not started (ops change) |
+| 2 | PR #16 runner code (heartbeat thread, adopt-mode supervisor) is in the deployed checkout. This branch contains it via a merge. | Code ready; deployed with the dedicated checkout (item 9) |
+| 3 | **MT5 multi-client check** | **Passed 2026-11-08 23:15–23:21 UTC** (section 7) |
+| 4 | **Memory headroom:** at least 1.5 GB free with all three runners | Free RAM varies: 0.89 GB at 22:47 and 2.17 GB at 23:07 UTC with two runners. The third runner needs about 170 MB working set and about 500 MB commit. The main consumer is WSL (`vmmemWSL`, about 7.5 GB private). **Re-check at launch.** |
+| 5 | Supervisor task `Kronos Shadow XAUUSD Selective A` (`ops/windows/selective_a_task.ps1`; supervisor `-Name xauselectivea`) | **Prepared; dry run verified; not registered** |
+| 6 | Health report covers the third state directory | **Done** (optional market; takes effect when the gold checkout's report is updated) |
 | 7 | CPI/NFP schedule file covers the test (it runs to 2027-12) | OK |
 | 8 | If not warmed up by 2026-11-13 21:00 UTC, commit the one allowed start-date amendment before the new date | Rule recorded |
+| 9 | Dedicated checkout `C:\Users\Admin\Projects\kronos-selective-a-shadow` (git worktree of the reviewed branch). Never run from the gold or crypto checkouts. | Not created (part of the launch) |
 
-**Launch command (after approval only):**
-```
-python -m research.xau_selective_a_shadow run --i-have-launch-approval
-```
+**Launch procedure (after approval only):**
+1. `git worktree add C:\Users\Admin\Projects\kronos-selective-a-shadow <reviewed commit>`
+2. In a reviewed commit, set `"launch_approved": true` in `research/configs/xau_selective_a_shadow.json`. The
+   pre-registration and parameters are unchanged; `load_config` refuses any drift.
+3. Run `ops\windows\selective_a_task.ps1` as a dry run and confirm "Pre-launch checks met".
+4. Run `ops\windows\selective_a_task.ps1 -Apply`. This registers the task; the supervisor starts the runner.
+5. Watch the first heartbeats, the `warmup_loaded` event and the health report. Warm-up takes about 2 minutes.
+
+A manual one-off alternative to steps 2–4 is `python -m research.xau_selective_a_shadow run --i-have-launch-approval`.
 - Status: `python -m research.xau_selective_a_shadow status`
 - Report: `python -m research.xau_selective_a_shadow report`
 - Emergency stop: create `state/xau_selective_a_shadow/KILL`, which rejects new simulated entries.
 - Graceful exit: create `state/xau_selective_a_shadow/STOP`.
+
+## 7. Preflight and resource benchmark (2026-11-08)
+**Live MT5 preflight.** Approved by the operator as a one-off compatibility test, not a launch. Command:
+`python -m research.xau_selective_a_shadow preflight --i-have-preflight-approval --state-dir <scratch>`.
+The run was scheduled for 23:15:50–23:20:47 UTC: the gold runner's books were flat, and its next decision point was
+the 23:30 bar close.
+
+**Before the run:**
+- the Phase 2D heartbeat was fresh;
+- no other Strategy A process was running;
+- 2.17 GB of RAM was free;
+- CPU was at about 13%.
+
+| Check | Result |
+| --- | --- |
+| Connection | Attached to the running terminal without login arguments (no `MT5_DEMO_*` variables set). MetaQuotes-Demo; demo account confirmed. |
+| Read-only proxy | Active. Every write-capable function the installed MetaTrader5 package exposes (`order_send`, `order_check`, `market_book_*`) is blocked. None was called. |
+| Demo account | Balance 3000, equity 3000, 0 positions, 0 orders: unchanged |
+| Warm-up | 12,957 M5 bars (2026-09-01 → 2026-11-08 23:15), calendar `broker_verified`, 24 books, breaker clear, 1,272 warm-up signals, 0 decisions |
+| First poll | 593 live ticks; 0 signals, entries or exits |
+| Restart recovery | 12,957 bars restored, 0 signal mismatches, reconciliation ok, breaker clear |
+| Phase 2D runner during the preflight | 5 heartbeats in 5 min (largest gap 60 s); MT5 connected on every beat; no disconnect or interruption events; no decisions affected |
+| Calendar providers | The ECB fetch timed out on the first start (`URLError` 10060) and succeeded on the restart 2 minutes later. It was recorded as `calendar_refresh_failed`, which the health report flags. |
+| Timing | Start and warm-up 126 s, poll < 0.1 s, restart restore 168 s, total 295 s |
+| Memory (preflight process) | Working set 110–113 MB, peak 167 MB. Private commit 440 MB, peak 494 MB (mostly imported libraries). |
+
+**Offline benchmark (synthetic, fake feed):**
+- 15,042 M5 bars;
+- warm-up 112 s and restore 223 s;
+- peak working set 128 MB;
+- 3.9 MB of state for 2.5 months, so about 20 MB per year.
+
+**Projected third-runner footprint:**
+- about 120–170 MB working set and about 500 MB commit;
+- a single core during warm-up or restore, and near idle otherwise (5-minute bars);
+- about 20 MB of disk per year.
+
+For comparison, the running Phase 2D runner holds 425 MB of commit.

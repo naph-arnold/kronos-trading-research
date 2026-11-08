@@ -283,3 +283,119 @@ def test_random_control_calibration_is_frozen():
                              "reward_to_risk": 2.5, "long_probability": 0.5}
     assert rnd["seeds"] == [1, 2, 3, 4, 5] and "DEVELOPMENT period" in rnd["calibration"]
     assert replace(FAST, reward_to_risk=2.5).reward_to_risk == 2.5
+
+
+# --------------------------------------------------------------------------- readiness: lock, approval, preflight
+
+def test_state_lock_refuses_a_second_runner_on_the_same_state(tmp_path):
+    from research.xau_selective_a_shadow import StateLock
+    first = StateLock(tmp_path / "s" / "runner.lock").acquire()
+    with pytest.raises(ValidationError, match="duplicate runner refused"):
+        StateLock(tmp_path / "s" / "runner.lock").acquire()
+    first.release()
+    StateLock(tmp_path / "s" / "runner.lock").acquire().release()  # free again after release
+
+
+def test_launch_approval_is_flag_or_reviewed_config_only(tmp_path, monkeypatch):
+    import argparse
+
+    import research.xau_selective_a_shadow as mod
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    assert config["launch_approved"] is False  # shipped unapproved
+    approved = tmp_path / "approved.json"
+    approved.write_text(json.dumps({**config, "launch_approved": True}), encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(mod, "_mt5_feed", lambda cfg: "feed")
+    monkeypatch.setattr(mod.SelectiveARunner, "run", lambda self, **kw: calls.append(kw) or {"ok": True})
+    ns = dict(state_dir=str(tmp_path / "st"), once=True, max_minutes=None)
+    with pytest.raises(SystemExit, match="NOT approved"):
+        mod.cmd_run(argparse.Namespace(i_have_launch_approval=False, config=str(CONFIG), **ns))
+    for flag, cfg in ((True, CONFIG), (False, approved)):
+        assert mod.cmd_run(argparse.Namespace(i_have_launch_approval=flag, config=str(cfg), **ns)) == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_preflight_refuses_without_approval_and_on_runner_state_dirs(tmp_path):
+    import argparse
+
+    from research.xau_selective_a_shadow import check_preflight_state, cmd_preflight, load_config
+    config, _ = load_config(CONFIG)
+    with pytest.raises(SystemExit, match="explicit operator approval"):
+        cmd_preflight(argparse.Namespace(i_have_preflight_approval=False, config=str(CONFIG),
+                                         state_dir=str(tmp_path / "x"), peer_state=None, output=str(tmp_path / "o")))
+    for bad in (tmp_path / "phase2d_shadow", tmp_path / "xau_selective_a_shadow", tmp_path / "state" / "scratch",
+                ROOT / config["state_dir"]):
+        with pytest.raises(ValidationError):
+            check_preflight_state(bad, config)
+    used = tmp_path / "used"
+    used.mkdir()
+    (used / "shadow.sqlite").write_text("x")
+    with pytest.raises(ValidationError, match="new or empty"):
+        check_preflight_state(used, config)
+    check_preflight_state(tmp_path / "fresh", config)
+
+
+def test_preflight_runs_warmup_poll_and_restart_on_scratch_state(tmp_path, monkeypatch):
+    from phase2_helpers import random_walk
+
+    from research.xau_selective_a_shadow import load_config, peer_heartbeats, run_preflight
+    from trading.marketcal.holidays import build_xauusd_calendar
+    from trading.sessions import XAUUSD_NY_MARKET_HOURS
+    monkeypatch.setenv("EXECUTION_MODE", "demo")
+    config, prereg = load_config(CONFIG)
+    config = {**config, "warmup_start": "2026-11-06T00:00:00+00:00"}
+    calendar, _ = build_xauusd_calendar(XAUUSD_NY_MARKET_HOURS, datetime(2026, 11, 1).date(), datetime(2026, 11, 30).date())
+    bars = random_walk("XAUUSD", "5m", datetime(2026, 11, 6, tzinfo=UTC), 3200, price=4000.0, vol=0.0008, seed=5,
+                       calendar=calendar, step=M5)
+    bars = [b for b in bars if b.close_time <= datetime(2026, 11, 17, tzinfo=UTC)]
+    now = datetime(2026, 11, 16, 15, 2, 30, tzinfo=UTC)
+    # a peer (Phase 2D) store with heartbeats, read strictly read-only
+    peer = ShadowStore(tmp_path / "peer" / "shadow.sqlite")
+    for minutes in (1, 2, 3):
+        peer.heartbeat(now - timedelta(minutes=minutes), runner_status="running", mt5_connection="connected")
+    peer.close()
+    peer_bytes = (tmp_path / "peer" / "shadow.sqlite").read_bytes()
+    counter = iter(range(10))
+    out = run_preflight(config, prereg, lambda: M5FakeFeed(bars), tmp_path / "scratch", peer_state=tmp_path / "peer",
+                        clock=lambda: now, memory=lambda: {"n": next(counter)},
+                        extra=lambda: {"calendar_service": _calendar_service(tmp_path / f"cal{next(counter)}")})
+    assert out["books"] == 24 and out["warmup_bars"] > 1000
+    assert out["restart"]["restored"]["signals_mismatch"] == 0 and out["restart"]["restored"]["reconciliation"]["ok"]
+    c = out["checks"]
+    assert c["books_24"] and c["no_breaker_trip"] and c["restart_signals_match"] and c["restart_reconciled"]
+    assert c["read_only_proxy"] is False  # the fake feed is not the MT5 proxy; the live run must report True
+    assert out["peer_phase2d_heartbeats_during_preflight"]["available"] is True
+    assert (tmp_path / "peer" / "shadow.sqlite").read_bytes() == peer_bytes  # peer untouched
+    assert peer_heartbeats(tmp_path / "nothing", now, now) == {"available": False}
+
+
+def test_connector_capability_probe_blocks_every_write_function():
+    from types import SimpleNamespace
+
+    from research.xau_selective_a_shadow import connector_capabilities
+    from trading.connectors.mt5 import ReadOnlyMt5
+
+    module = SimpleNamespace(**{name: (lambda *a: None) for name in (
+        "initialize", "order_calc_profit", "orders_get", "positions_get", "order_check", "positions_total")})
+    setattr(module, "order_" + "send", lambda *a: None)
+    caps = connector_capabilities(SimpleNamespace(conn=SimpleNamespace(mt5=ReadOnlyMt5(module))))
+    assert caps["read_only_proxy"] is True and caps["write_functions_reachable"] == []
+    assert "order_check" in caps["write_functions_checked"] and "order_" + "send" in caps["write_functions_checked"]
+
+
+def test_emergency_stop_files_live_in_strategy_a_state_only(tmp_path, monkeypatch):
+    from research.xau_selective_a_shadow import SelectiveARunner, load_config
+    monkeypatch.setenv("EXECUTION_MODE", "demo")
+    config, prereg = load_config(CONFIG)
+    state = tmp_path / "xa"
+    runner = SelectiveARunner(config, prereg, M5FakeFeed([]), state)
+    assert runner.breaker.kill_file == state / "KILL" and not runner.breaker.reasons()
+    (state / "KILL").write_text("operator", encoding="utf-8")
+    assert any("Kill file present" in r for r in runner.breaker.reasons())  # every decision consults this
+    (state / "STOP").write_text("operator", encoding="utf-8")
+    beats = []
+    monkeypatch.setattr(SelectiveARunner, "heartbeat", lambda self, force=False: beats.append(1) or True)
+    result = runner.run(once=True, sleep=lambda s: None)
+    assert result == {"last_poll": {}, "status": None} and runner.engine is None  # STOP: never started
+    assert any(e["kind"] == "stop_file" for e in runner.store.events())
+    runner.store.close()
