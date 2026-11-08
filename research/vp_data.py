@@ -98,7 +98,10 @@ def memory_status() -> dict | None:
     ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
     p = _P()
     p.cb = ctypes.sizeof(_P)
-    ctypes.windll.psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(p), p.cb)
+    k32 = ctypes.windll.kernel32
+    k32.GetCurrentProcess.restype = ctypes.c_void_p  # 64-bit pseudo-handle; the default c_int truncates it
+    ctypes.windll.psapi.GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+    ctypes.windll.psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(p), p.cb)
     gb = 2 ** 30
     return {"load_pct": int(m.dwMemoryLoad), "avail_gb": round(m.ullAvailPhys / gb, 2), "total_gb": round(m.ullTotalPhys / gb, 2),
             "proc_ws_gb": round(p.WorkingSetSize / gb, 2), "proc_peak_ws_gb": round(p.PeakWorkingSetSize / gb, 2)}
@@ -113,6 +116,8 @@ def set_background_priority() -> bool:
         os.nice(10)
         return True
     k = ctypes.windll.kernel32
+    k.GetCurrentProcess.restype = ctypes.c_void_p  # 64-bit pseudo-handle; the default c_int truncates it
+    k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
     return bool(k.SetPriorityClass(k.GetCurrentProcess(), 0x00100000))
 
 
