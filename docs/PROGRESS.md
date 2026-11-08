@@ -467,3 +467,13 @@ logged in. Weekly `report`; interim checkpoint at 50 candidate trades; final eva
 
 ## Update policy
 Only mark items done when code, tests or verifiable operational evidence exists. For every milestone add date, branch/commit, command/test results, blockers, and next step. Do not treat plans or historical conversation claims as verified implementation.
+
+---
+
+## Architecture clarification — Python core / optional MQL5 (2026-11-08)
+
+- **Documented:** [ADR-001](adr/001-python-first-optional-mql5.md) fixes Python as the shared central engine and separate Python read-only XAUUSD/MT5 and BTCUSDT/Binance research-shadow pipelines.
+- **Verified in reviewed Phase 2 branch:** Python MT5 and Binance market-data connectors exist; frozen XAUUSD shadow runner is on PR #12. Do not mistake implementation or smoke checks for evidence of profitable forward results.
+- **Not yet verified:** independent continuous Binance shadow runner being developed separately; do not mark complete until its code, tests and running status are checked.
+- **Deferred:** MQL5 Expert Advisor. Before addition, compare against a Python MT5 demo adapter for native Strategy Tester support, measured execution/reliability benefits and maintenance cost, then request separate Phase 3 approval. Neither native MT5 order routing nor Binance testnet orders are authorized for Phase 2.
+- **Unchanged:** demo-only architecture, no orders during shadow research, 0.5% per-trade intended risk ceiling and independent market safeguards. PR stack #9 → #10 → #11 → #12 remains unmerged unless separately approved.
