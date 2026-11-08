@@ -162,25 +162,54 @@ def cmd_btc(a) -> dict:
     state = {k: 0 for k in ("agg_id_gaps", "agg_ids_missing", "trade_id_gaps", "trade_ids_missing", "ts_decreasing",
                             "invalid_rows", "rows", "trades")}
     state.update(last_agg_id=None, last_trade_id=None, last_ts=None, first_ts=None)
-    files, B, K, W, MIN = [], [], [], [], []
+    out = Path(a.output)
+    parts = out.with_name(out.name + "_parts")  # one shard per month: resumable, bounded memory
+    parts.mkdir(parents=True, exist_ok=True)
+    files = []
     for month in months:
         name = f"{a.symbol}-aggTrades-{month}.zip"
+        shard = parts / f"{month}.npz"
+        meta_path = parts / f"{month}.json"
+        if shard.exists() and meta_path.exists():
+            meta = json.loads(meta_path.read_text())
+            if meta["base_bin"] == a.base_bin and _sha_file(shard) == meta["shard_sha256"]:
+                state = meta["state_after"]
+                files.append(meta["file"])
+                print(month, "resumed from shard", flush=True)
+                continue
         url = f"{AGG_BASE}/{a.symbol}/{name}"
         t0 = time.time()
-        blob = _get(url)
+        tmp = parts / (name + ".partial")
+        h = hashlib.sha256()
+        with urlopen(url, timeout=600) as response, open(tmp, "wb") as f:  # stream to disk, hash while writing
+            for block in iter(lambda: response.read(1 << 22), b""):
+                h.update(block)
+                f.write(block)
         published = _get(url + ".CHECKSUM").decode().split()[0]
-        actual = hashlib.sha256(blob).hexdigest()
+        actual = h.hexdigest()
         if actual != published:
+            tmp.unlink()
             raise ValueError(f"{name}: checksum mismatch")
         before = dict(state)
-        with zipfile.ZipFile(io.BytesIO(blob)) as z, z.open(name.replace(".zip", ".csv")) as stream:
-            (b, k, w), mins = process_aggtrades_csv(stream, a.base_bin, state)
-        del blob
-        B.append(b), K.append(k), W.append(w), MIN.append(mins)
-        files.append({"file": name, "sha256": actual, "rows": state["rows"] - before["rows"],
-                      "agg_id_gaps": state["agg_id_gaps"] - before["agg_id_gaps"],
-                      "trade_id_gaps": state["trade_id_gaps"] - before["trade_id_gaps"]})
-        print(month, files[-1]["rows"], f"{time.time() - t0:.0f}s", flush=True)
+        with zipfile.ZipFile(tmp) as z, z.open(name.replace(".zip", ".csv")) as stream:
+            (b, k, w), mins = process_aggtrades_csv(stream, a.base_bin, state, chunksize=2_000_000)
+        tmp.unlink()
+        np.savez_compressed(shard, bucket_ms=b, bin=k, w=w, minute=mins.index.to_numpy(np.int64),
+                            **{f"m_{c}": mins[c].to_numpy() for c in mins.columns})
+        fmeta = {"file": name, "sha256": actual, "rows": state["rows"] - before["rows"],
+                 "agg_id_gaps": state["agg_id_gaps"] - before["agg_id_gaps"],
+                 "trade_id_gaps": state["trade_id_gaps"] - before["trade_id_gaps"]}
+        meta_path.write_text(json.dumps({"base_bin": a.base_bin, "shard_sha256": _sha_file(shard), "file": fmeta,
+                                         "state_after": state}, indent=2))
+        files.append(fmeta)
+        del b, k, w, mins
+        print(month, fmeta["rows"], f"{time.time() - t0:.0f}s", flush=True)
+    B, K, W, MIN = [], [], [], []
+    for month in months:
+        d = np.load(parts / f"{month}.npz")
+        B.append(d["bucket_ms"]), K.append(d["bin"]), W.append(d["w"])
+        MIN.append(pd.DataFrame({c: d[f"m_{c}"] for c in ("volume", "high", "low", "first", "last", "n")},
+                                index=pd.Index(d["minute"])))
     b, k, w = _group_bins(np.concatenate(B), np.concatenate(K), np.concatenate(W))
     mins = pd.concat(MIN)
     if not mins.index.is_unique:
