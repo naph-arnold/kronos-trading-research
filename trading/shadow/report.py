@@ -245,3 +245,52 @@ def to_markdown(report: dict) -> str:
         rejected.update(m["rejection_reasons"])
     lines += [f"- Rejection reasons (all books): {dict(rejected)}", ""]
     return "\n".join(lines)
+
+
+def candidate_criteria(store: ShadowStore, books: dict, *, candidate_key: str, control_keys: list[str],
+                       criteria_text: list[str], unseen_start: datetime, final_date: datetime,
+                       min_final_trades: int, equity: Decimal, cost_key: Decimal, now: datetime,
+                       max_drawdown_pct: float = 6.0) -> dict:
+    """Market-agnostic version of the pre-registered criteria (Phase 2E): (1) net mean R > 0, (2) bootstrap 95% CI
+    lower bound > -0.05, (3) mean R above the median of the candidate's own random controls, (4) positive net result
+    in >= 2 of the latest 3 complete two-month blocks, (5) max drawdown below the limit. No verdict before the final
+    checkpoint (>= min_final_trades and >= final_date)."""
+    def book_of(key):
+        return next((b for b, i in books.items() if i["strategy_key"] == key and i["initial_equity"] == equity
+                     and i["commission"] == cost_key), None)
+    cand = book_of(candidate_key)
+    trades = store.trades(cand) if cand else []
+    r = [float(t["r_multiple"]) for t in trades]
+    control_means = []
+    for key in control_keys:
+        cb = book_of(key)
+        cr = [float(t["r_multiple"]) for t in store.trades(cb)] if cb else []
+        if cr:
+            control_means.append(statistics.fmean(cr))
+    curve = [v for _, v in store.equity_curve(cand)] if cand else []
+    blocks = _blocks(trades, unseen_start, now)
+    last3, n = blocks[-3:], len(trades)
+    mean_r, ci = (statistics.fmean(r) if r else None), bootstrap_ci(r)
+    dd = float(_drawdown([equity] + curve) * 100)
+    median_ctrl = statistics.median(control_means) if control_means else None
+
+    def status(ok, enough):
+        return "insufficient_data" if not enough else ("pass" if ok else "fail")
+    criteria = [
+        {"criterion": criteria_text[0], "value": mean_r, "status": status(mean_r is not None and mean_r > 0, n >= 2)},
+        {"criterion": criteria_text[1], "value": ci, "status": status(ci is not None and ci[0] > -0.05, ci is not None)},
+        {"criterion": criteria_text[2], "value": {"candidate": mean_r, "control_median": median_ctrl,
+                                                  "controls_with_trades": len(control_means)},
+         "status": status(mean_r is not None and median_ctrl is not None and mean_r > median_ctrl,
+                          n >= 2 and median_ctrl is not None)},
+        {"criterion": criteria_text[3], "value": last3,
+         "status": status(sum(1 for b in last3 if b["net_pnl"] > 0) >= 2, len(last3) == 3)},
+        {"criterion": criteria_text[4], "value": round(dd, 3),
+         "status": "fail" if dd >= max_drawdown_pct else ("pass" if n >= 2 else "insufficient_data")},
+    ]
+    final = n >= min_final_trades and now >= final_date
+    verdict = (("pass" if all(c["status"] == "pass" for c in criteria) else "retire (criterion failed)") if final
+               else "in progress - no conclusion before the final checkpoint")
+    return {"candidate": candidate_key, "book": cand, "trades": n, "final_checkpoint_reached": final,
+            "final_checkpoint": {"min_trades": min_final_trades, "not_before": final_date.isoformat()},
+            "criteria": criteria, "verdict": verdict, "two_month_blocks": blocks}

@@ -29,12 +29,12 @@ from decimal import Decimal
 from typing import Callable, Sequence
 
 from trading.breaker import CircuitBreaker
-from trading.common import Market, Side, ValidationError, require_utc
+from trading.common import MARKET_SYMBOLS, Market, Side, ValidationError, require_utc
 from trading.config import DemoEnvironment
 from trading.daily import DailyLossLedger
 from trading.health import MarketHealthMonitor
-from trading.instruments import Mt5InstrumentSpec
-from trading.marketdata import Bar, Quote
+from trading.instruments import BinanceSpotSpec, InstrumentSpec
+from trading.marketdata import INTERVALS, Bar, Quote
 from trading.replay import HistoryView
 from trading.risk import RiskLimits, evaluate
 from trading.sessions import TradingCalendar
@@ -105,6 +105,9 @@ class EngineSettings:
     max_decision_latency: timedelta = timedelta(seconds=30)
     spec_max_age: timedelta = timedelta(days=1)
     fallback_half_spread: Decimal = Decimal("0.085")  # tick p50 0.17 / 2; used only when a bar has no ticks
+    # Market/interval default to the Phase 2D XAUUSD configuration; Phase 2E uses BTCUSDT spot, 1h.
+    market: Market = Market.XAUUSD_MT5
+    interval: str = "15m"
 
 
 @dataclass
@@ -126,13 +129,19 @@ class ShadowEngine:
     daily: DailyLossLedger
     calendar: TradingCalendar
     event_guard: Callable[[datetime], "str | None"]
-    swap: SwapSpec
+    swap: SwapSpec | None  # None = no overnight financing (spot)
     settings: EngineSettings
     health: MarketHealthMonitor = field(default_factory=lambda: MarketHealthMonitor(MARKET))
 
     def __post_init__(self):
-        if self.limits.market is not MARKET or self.breaker.market is not MARKET or self.daily.market is not MARKET:
-            raise ValueError("Shadow engine is XAUUSD-only")
+        market = self.settings.market
+        if self.limits.market is not market or self.breaker.market is not market or self.daily.market is not market:
+            raise ValueError("Limits, breaker and daily ledger must belong to the engine's market")
+        if self.health.market is not market:
+            raise ValueError("Market-health monitor belongs to another market")
+        if self.settings.interval not in INTERVALS:
+            raise ValueError("Unsupported interval")
+        self._symbol, self._step = MARKET_SYMBOLS[market], INTERVALS[self.settings.interval]
         if self.daily.halt_fraction != self.limits.daily_loss_halt_fraction:
             raise ValueError("Daily ledger and limits disagree on the halt threshold")
         ids = [b.book_id for b in self.books]
@@ -141,7 +150,10 @@ class ShadowEngine:
         for book in self.books:
             if book.commission not in self.instruments:
                 raise ValueError(f"No instrument spec for commission scenario {book.commission}")
-        self.swap.validate()
+        if self.swap is not None:
+            self.swap.validate()
+        elif market is Market.XAUUSD_MT5:
+            raise ValueError("XAUUSD shadow trading requires a swap specification")
         with self.store.transaction():
             for book in self.books:
                 self.store.ensure_book(book.book_id, book.strategy_key, book.initial_equity, book.commission)
@@ -158,7 +170,7 @@ class ShadowEngine:
         self.strategies = {key: self.strategy_factory(key) for key in self.strategy_keys}
         self.bars: list[Bar] = []
         regenerated: set[tuple[str, str]] = set()
-        for bar in self.store.load_bars():
+        for bar in self.store.load_bars(self._symbol):
             self.bars.append(bar)
             view = HistoryView(self.bars, len(self.bars))
             for key, strategy in self.strategies.items():
@@ -175,7 +187,7 @@ class ShadowEngine:
                         for s in self.store.signals(status="pending")]
         self.last_bar_close = self.bars[-1].close_time if self.bars else None
         tick = self.store.get_meta("last_tick")
-        self.last_tick = None if tick is None else _quote_from_meta(tick)
+        self.last_tick = None if tick is None else _quote_from_meta(tick, self._symbol)
         self.ticks_in_bar = int(self.store.get_meta("ticks_in_bar") or 0)
         report = self.reconcile()
         return {"bars": len(self.bars), "positions": len(self.positions), "pending": len(self.pending),
@@ -226,8 +238,8 @@ class ShadowEngine:
         new_bars = []
         for bar in sorted(bars, key=lambda b: b.open_time):
             bar.validate()
-            if bar.symbol != "XAUUSD" or bar.interval != "15m":
-                raise ValidationError("Shadow engine expects XAUUSD M15 bars")
+            if bar.symbol != self._symbol or bar.interval != self.settings.interval:
+                raise ValidationError(f"Shadow engine expects {self._symbol} {self.settings.interval} bars")
             if bar.close_time > wall_now:
                 continue  # still forming
             last = new_bars[-1].close_time if new_bars else self.last_bar_close
@@ -237,7 +249,7 @@ class ShadowEngine:
                 raise ValidationError("Overlapping bar")
             new_bars.append(bar)
         horizon = (new_bars[-1].close_time if new_bars else self.last_bar_close)
-        horizon = None if horizon is None else horizon + M15
+        horizon = None if horizon is None else horizon + self._step
         floor = self.last_tick.time if self.last_tick else None
         new_ticks, deferred = [], 0
         for tick in sorted(ticks, key=lambda q: q.time):
@@ -292,7 +304,7 @@ class ShadowEngine:
                 quote = self.last_tick if self.last_tick and self.last_tick.time < close else None
                 if quote is None:
                     half = self.settings.fallback_half_spread
-                    quote = Quote(symbol="XAUUSD", bid=bar.close - half, ask=bar.close + half, time=close)
+                    quote = Quote(symbol=self._symbol, bid=bar.close - half, ask=bar.close + half, time=close)
                 slip = self.limits.slippage_allowance
                 price = quote.bid - slip if position.side is Side.LONG else quote.ask + slip
                 self._close(book_id, price, (quote.bid + quote.ask) / TWO, close, "time_exit", quote)
@@ -386,7 +398,7 @@ class ShadowEngine:
         if latency > self.settings.max_decision_latency:
             pre.append(f"System not live at decision time: fill tick processed {latency} later "
                        f"(data interruption or restart catch-up)")
-        if self.calendar.verification != "broker_verified":
+        if self.settings.market is Market.XAUUSD_MT5 and self.calendar.verification != "broker_verified":
             pre.append("XAUUSD trading-session calendar not verified against the broker")
         if now - self.spec_retrieved_at > self.settings.spec_max_age:
             pre.append("Instrument specification is stale; re-read venue metadata")
@@ -396,11 +408,12 @@ class ShadowEngine:
         position = self.positions.get(book.book_id)
         positions, used = (), ZERO
         if position is not None:
-            positions = (OpenPosition(position.signal_id, "XAUUSD", position.side, position.size, position.entry,
+            positions = (OpenPosition(position.signal_id, self._symbol, position.side, position.size, position.entry,
                                       position.stop, self._risk_to_stop(position, instrument)),)
-            used = position.size * instrument.margin_per_lot
+            used = (position.size * position.entry if isinstance(instrument, BinanceSpotSpec)
+                    else position.size * instrument.margin_per_lot)
         balance = book.initial_equity + self.realized[book.book_id]
-        account = AccountSnapshot(market=MARKET, account_id=_account_id(book.book_id), is_demo=True,
+        account = AccountSnapshot(market=self.settings.market, account_id=_account_id(book.book_id), is_demo=True,
                                   currency=instrument.account_currency, equity=equity, balance=balance,
                                   available_funds=max(equity - used, ZERO), day_start_equity=equity,
                                   snapshot_at=now, reconciled=True, open_positions=positions)
@@ -464,7 +477,7 @@ class ShadowEngine:
         value = instrument.value_per_price_unit(p.size)
         price_pnl = value * (price - p.entry) * direction
         commission = instrument.round_trip_cost(p.size, p.entry, price)
-        swap, nights = self.swap.charge(p.side, p.size, p.opened_at, when)
+        swap, nights = self.swap.charge(p.side, p.size, p.opened_at, when) if self.swap else (ZERO, 0)
         pnl = price_pnl - commission + swap
         gross = value * (exit_mid - p.entry_mid) * direction
         risk_px = abs(p.entry - p.stop) or Decimal("1E-9")
@@ -482,7 +495,7 @@ class ShadowEngine:
         self.store.set_realized(book_id, self.realized[book_id])
         self._observe(book_id, self._equity(book_id, tick, when), when)
 
-    def _risk_to_stop(self, p: SimPosition, instrument: Mt5InstrumentSpec) -> Decimal:
+    def _risk_to_stop(self, p: SimPosition, instrument: InstrumentSpec) -> Decimal:
         slip = self.limits.slippage_allowance
         stop_fill = p.stop - slip if p.side is Side.LONG else p.stop + slip
         direction = 1 if p.side is Side.LONG else -1
@@ -500,7 +513,7 @@ class ShadowEngine:
         exit_price = quote.bid if p.side is Side.LONG else quote.ask
         unrealized = (instrument.value_per_price_unit(p.size) * (exit_price - p.entry) * direction
                       - instrument.round_trip_cost(p.size, p.entry, exit_price)
-                      + self.swap.charge(p.side, p.size, p.opened_at, max(at, p.opened_at))[0])
+                      + (self.swap.charge(p.side, p.size, p.opened_at, max(at, p.opened_at))[0] if self.swap else ZERO))
         return equity + unrealized
 
     def _observe(self, book_id: str, equity: Decimal, at: datetime) -> None:
@@ -555,6 +568,6 @@ def _signal_from_body(body: dict) -> TradeSignal:
     return TradeSignal.create(**values)
 
 
-def _quote_from_meta(text: str) -> Quote:
+def _quote_from_meta(text: str, symbol: str = "XAUUSD") -> Quote:
     at, bid, ask = text.split("|")
-    return Quote(symbol="XAUUSD", bid=Decimal(bid), ask=Decimal(ask), time=datetime.fromisoformat(at))
+    return Quote(symbol=symbol, bid=Decimal(bid), ask=Decimal(ask), time=datetime.fromisoformat(at))

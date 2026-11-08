@@ -99,6 +99,16 @@ providers (official/licensed, attributed)        market-specific rules          
 - Pre-registration is enforced in code: config ↔ pre-registration file hash, parameter hashes and risk fraction.
   Details: [phase2d-shadow-forward-test.md](phase2d-shadow-forward-test.md).
 
+## BTC/USDT shadow pipeline (Phase 2E)
+- Public market data only: REST klines/exchangeInfo/time/bookTicker (`data-api.binance.vision`) and the receive-only
+  WebSocket `bookTicker` stream (`data-stream.binance.vision`) with reconnection, REST fallback, gap recording and
+  server-time-corrected UTC stamps. No credentials.
+- Same shadow engine as XAUUSD (`EngineSettings.market`/`interval`), separate process, worktree, state, breaker,
+  daily ledger, calendar store and reports. Spot is long/flat; fees per side on notional; no swap.
+- Phase 3 preparation (`trading/execution_prep/`): order intents, filter validation, reconciliation and testnet
+  reset detection with no network code; submission raises until Phase 3 is authorized.
+  Details: [phase2e-binance-shadow.md](phase2e-binance-shadow.md).
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.

@@ -108,9 +108,9 @@ class ShadowStore:
                 (bar.open_time.isoformat(), str(bar.open), str(bar.high), str(bar.low), str(bar.close),
                  str(bar.volume), bar.interval, source))
 
-    def load_bars(self) -> list[Bar]:
+    def load_bars(self, symbol: str = "XAUUSD") -> list[Bar]:
         rows = self._x("SELECT open_time, open, high, low, close, volume, interval FROM bars ORDER BY open_time")
-        return [Bar(symbol="XAUUSD", interval=r[6], open_time=datetime.fromisoformat(r[0]), open=Decimal(r[1]),
+        return [Bar(symbol=symbol, interval=r[6], open_time=datetime.fromisoformat(r[0]), open=Decimal(r[1]),
                     high=Decimal(r[2]), low=Decimal(r[3]), close=Decimal(r[4]), volume=Decimal(r[5]))
                 for r in rows.fetchall()]
 

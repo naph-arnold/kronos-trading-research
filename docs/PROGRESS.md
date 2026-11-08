@@ -1,6 +1,6 @@
 # Kronos Trading Bot — Verified Progress
 
-Updated: 2026-11-07
+Updated: 2026-11-08
 
 ## Approved decisions
 - XAUUSD via MetaTrader 5 demo and BTC/USDT via Binance Spot Testnet.
@@ -20,6 +20,7 @@ Updated: 2026-11-07
 - [x] Phase 2A: XAUUSD strategy research on MetaQuotes-Demo MT5 data — verified data, broker-verified sessions, walk-forward + holdout results recorded (no robust edge; all experimental). Commission per lot still unverified.
 - [x] Phase 2B: BTC/USDT strategy research — walk-forward + holdout results recorded (no robust edge; all experimental). Testnet account/fee verification pending testnet keys.
 - [x] Phase 2D: XAUUSD shadow forward-test system (read-only, simulation only) — implemented, tested, smoke-run read-only against MetaQuotes-Demo; forward data collection starts 2026-11-09 once the runner is started. No forward results yet.
+- [x] Phase 2E: BTC/USDT continuous shadow trading (public data, simulation only) — research, pre-registration, runner live since 2026-11-08; forward window starts 2026-11-09. No forward results yet.
 - [ ] Phase 3: Independent automated demo execution adapters.
 - [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
 - [ ] Phase 5: Monitored continuous demo validation.
@@ -462,6 +463,71 @@ Operator keeps the runner (`$env:EXECUTION_MODE="demo"; .venv311\Scripts\python 
 `research/forward_test/run_shadow.ps1`) before the Sunday 2026-11-08 23:00 UTC reopen and keeps the terminal
 logged in. Weekly `report`; interim checkpoint at 50 candidate trades; final evaluation at ≥ 100 trades and
 ≥ 2027-05-09. No parameter changes; no execution adapters until explicitly authorized.
+
+---
+
+## Milestone: Phase 2E — BTC/USDT continuous shadow trading (2026-11-08)
+
+Branch `feat/phase2e-binance-shadow` in worktree `../kronos-binance-shadow`, stacked on PR #12 (→ #11 → #10 → #9),
+so the running XAUUSD checkout was never touched. Simulation only; no Binance credentials; no real or testnet
+orders. Details: `docs/phase2e-binance-shadow.md`.
+
+### Added
+- `trading/connectors/binance_stream.py`: receive-only WebSocket `bookTicker` (reconnect/back-off, per-second
+  compression keeping extremes, server-time-corrected stamps), `ClockSync` (fastest-of-3, slow samples ignored);
+  `BinanceReadOnlyClient.closed_klines` (forming candle dropped, gaps left for detection).
+- `trading/shadow/engine.py` generalized via `EngineSettings.market/interval` (XAUUSD defaults unchanged; all
+  earlier tests pass unmodified); `ShadowStore.load_bars(symbol)`; `report.candidate_criteria`.
+- `trading/strategies/crypto.py`: `DonchianBreakout`, `VwapMeanReversion`, `BtcRandomEntry` (long-only control).
+- `research/phase2e_btc_history.py` (gap-tolerant downloads, resumable Kronos forecasts),
+  `research/phase2e_btcusdt_research.py` (parallel walk-forward + matched random controls),
+  `research/phase2e_binance_shadow.py` (24/7 runner, live Kronos, heartbeats during outages, reports).
+- `research/forward_test/phase2e_btcusdt_preregistration.json`, `research/configs/phase2e_binance_shadow.json`,
+  `research/configs/phase2e_btcusdt_research.json`, `research/forward_test/run_binance_shadow.ps1`.
+- `trading/execution_prep/binance_testnet.py`: Phase 3 preparation (intents, filters, idempotent client ids,
+  reconciliation, testnet-reset detection); `submit()` always raises; no network code.
+- Dependency: `websockets==13.1` (requirements-trading.txt).
+
+### Research (out-of-sample 2019-07 → 2026-05, 41 walk-forward windows; 2B holdout excluded)
+| Candidate | OOS trades | Net mean R (95% CI) | Gross mean R | Beats matched random | Decision |
+| --- | --- | --- | --- | --- | --- |
+| Donchian breakout | 593 | −0.020 (−0.124, +0.091) | +0.123 | 18/20 | Forward test (candidate) |
+| EMA trend | 208 | −0.084 (−0.273, +0.112) | +0.072 | 7/20 | Trend control |
+| VWAP mean reversion | 336 | −0.230 (−0.327, −0.132) | −0.056 | 0/20 | Rejected |
+| Kronos (KR-05) | 7,159 | −0.167 (−0.175, −0.158) | +0.012 | 20/20 | Monitored model (fees on 1-hour holds) |
+New data: 42,300 hourly candles 2019-01 → 2023-10 (20 recorded exchange-outage gaps), 64,632 Kronos-mini forecasts.
+
+### Verified results
+- Tests (worktree, Python 3.11.18): `pytest -q tests --ignore=tests/test_kronos_regression.py` → **439 passed,
+  8 integration deselected** (415 before + 24 new in `tests/test_phase2e_binance_shadow.py`); ruff clean. GitHub
+  Actions on `007443b`: **435 passed**, ruff and pip-audit clean
+  ([run 42448295495](https://github.com/naph-arnold/kronos-trading-research/actions/runs/42448295495)); PR #14.
+- Live smoke (public data): 2,380 warm-up candles, WebSocket quotes processed, all four calendars refreshed;
+  restart reproduced 965 warm-up signals with 0 mismatches; KILL tripped the BTC breaker; STOP exited in 13 s.
+- Clock: local clock about 0.95 s ahead of Binance (within the 2 s tolerance). A 12.9 s reading turned out to
+  be a slow-request artifact, so `ClockSync` was hardened.
+- Runner launched detached 2026-11-08 04:45 UTC (supervisor `run_binance_shadow.ps1`): heartbeats every minute,
+  status `ok`, WebSocket connected.
+
+### XAUUSD runner observation (not modified)
+Over 2026-11-07, MT5 lost its broker connection during 05:58–14:30, 14:31–00:21 and 00:22–04:23 UTC (weekend;
+market closed); the runner stayed up and reconnected by itself. It writes heartbeats only after successful polls,
+so those periods look like downtime. A fix (heartbeat on every loop with a status, as in the BTC runner) needs a
+restart of the XAUUSD runner and is left for operator approval.
+
+### Component status
+| Component | Status |
+| --- | --- |
+| BTC public market data (REST + WebSocket, gaps, clock) | **Completed** (tested, live) |
+| BTC shadow engine, runner, reports | **Completed**; runner **Verified** live |
+| BTC forward test | **Not started** for results — window opens 2026-11-09 |
+| Binance fee | **Estimated** (0.1% published base tier; 0.2% stress) — needs testnet/account verification |
+| Spot Testnet execution | Not started (preparation only; Phase 3 not authorized) |
+| Grok agents | Not started (Phase 4) |
+
+### Next step
+Monitor both runners (`status`/`report` weekly). Decide on the XAUUSD heartbeat fix. Testnet keys only when Phase 3 is
+authorized. No parameter changes during the evaluations.
 
 ---
 

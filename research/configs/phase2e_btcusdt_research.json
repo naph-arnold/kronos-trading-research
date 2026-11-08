@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "phase2e-btcusdt-research",
+  "data_partition": {
+    "research_span": "2019-01-01 -> 2026-05-24T20:00Z: walk-forward selection and out-of-sample evaluation (2019-01..2023-10 never examined before in this project)",
+    "excluded": "2026-05-24T20:00Z -> 2026-11-01: Phase 2B holdout, already examined; NOT used for any choice or as validation",
+    "fresh_validation": "forward shadow data after the pre-registration (no historical period is fresh for the final choice)"
+  },
+  "datasets": ["data/raw/binance_btcusdt_1h_2019-01_2023-11.csv", "data/raw/binance_btcusdt_1h_2023-11_2026-11.csv"],
+  "research_end": "2026-05-24T20:00:00+00:00",
+  "exchange_info_snapshot": "data/processed/binance_btcusdt_exchangeinfo_public.json",
+  "kronos_forecasts": "data/processed/kronos_mini_btcusdt_1h_2019-01_2026-05.jsonl",
+  "initial_equity": "10000",
+  "costs": {"taker_fee_rate": "0.001", "spread_bps": "1", "slippage_allowance_usdt": "10",
+            "note": "Same as Phase 2B: Binance published base-tier spot fee 0.1% (not account-verified), 1 bp spread, 10 USDT adverse slippage per side"},
+  "risk": {"risk_fraction": "0.005", "max_spread_usdt": "100", "max_entry_deviation_fraction": "0.005"},
+  "walk_forward": {"train_bars": 4380, "test_bars": 1460, "warmup_bars": 400, "min_train_trades": 8},
+  "event_blackout": "not applied in research (historical CPI/FOMC schedules for 2019-2026 are not all available offline); applied live",
+  "candidates": {
+    "donchian": {"grid": {"entry_lookback": [24, 48, 96], "atr_stop_mult": [1.5, 2.5], "reward_to_risk": [2.0, 3.0]},
+                 "max_holding_bars": 72},
+    "ema_trend": {"grid": {"ema_fast": [10, 20, 50], "ema_slow": [100, 200], "atr_stop_mult": [1.5, 2.5],
+                           "reward_to_risk": [2.0, 3.0]}, "max_holding_bars": null},
+    "vwap_reversion": {"grid": {"vwap_bars": [24, 72], "entry_atr": [1.5, 2.5], "atr_stop_mult": [1.0, 2.0],
+                                "trend_ema": [null, 200]}, "max_holding_bars": 24},
+    "kronos": {"fixed": {"min_edge_bps": 20.0, "trend_ema": 200, "atr_stop_mult": 1.5}, "max_holding_bars": 1,
+               "note": "KR-05 pre-registered parameters; never tuned"}
+  },
+  "random_seeds": 20,
+  "bootstrap": {"resamples": 2000, "seed": 7},
+  "workers": 8
+}

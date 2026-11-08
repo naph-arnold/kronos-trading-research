@@ -230,3 +230,107 @@ def forecasts_by_target(report: dict) -> dict[datetime, float]:
         moment = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00"))
         out[moment] = float(item["predicted_close"])
     return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E candidates (long/flat spot). Exits are expressed in ATR / R terms so that
+# matched random-entry controls can reproduce the same exit structure.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DonchianParams:
+    entry_lookback: int = 48
+    atr_period: int = 14
+    atr_stop_mult: float = 2.0
+    reward_to_risk: float | None = 2.0
+
+
+class DonchianBreakout(StrategyBase):
+    """Long when the bar closes above the highest high of the previous `entry_lookback` bars
+    (the current bar is excluded from the channel). Stop = entry - atr_stop_mult x ATR;
+    target = reward_to_risk x risk; the runner applies the configured time exit."""
+
+    strategy_id = "btc-donchian"
+    version = "1.0.0"
+    market = Market.BTCUSDT_BINANCE_SPOT
+
+    def __init__(self, params: DonchianParams = DonchianParams(), **kwargs):
+        super().__init__(params, **kwargs)
+        self.highs = RollingWindow(params.entry_lookback)
+        self.atr = ATR(params.atr_period)
+
+    def on_bar(self, bar: Bar) -> SignalDraft | None:
+        p = self.params
+        close = float(bar.close)
+        atr = self.atr.update(float(bar.high), float(bar.low), close)
+        draft = None
+        if self.highs.full and atr is not None:
+            channel_high = max(self.highs.values)
+            if close > channel_high:
+                stop = close - p.atr_stop_mult * atr
+                draft = SignalDraft(Side.LONG, close, stop, rr_target(Side.LONG, close, stop, p.reward_to_risk),
+                                    {"channel_high": channel_high, "atr": atr})
+        self.highs.update(float(bar.high))
+        return draft
+
+
+@dataclass(frozen=True)
+class VwapReversionParams:
+    vwap_bars: int = 24
+    atr_period: int = 14
+    entry_atr: float = 2.0  # enter when close <= VWAP - entry_atr x ATR
+    atr_stop_mult: float = 1.5
+    trend_ema: int | None = None  # optional: only when close > EMA(trend_ema)
+
+
+class VwapMeanReversion(StrategyBase):
+    """Rolling VWAP over the last `vwap_bars` closed bars (typical price x volume / volume).
+    Long when the close is at least entry_atr x ATR below that VWAP (and above the trend EMA if
+    enabled); target = the VWAP at signal time; stop = entry - atr_stop_mult x ATR."""
+
+    strategy_id = "btc-vwap-reversion"
+    version = "1.0.0"
+    market = Market.BTCUSDT_BINANCE_SPOT
+
+    def __init__(self, params: VwapReversionParams = VwapReversionParams(), **kwargs):
+        super().__init__(params, **kwargs)
+        self.pv, self.vol = RollingWindow(params.vwap_bars), RollingWindow(params.vwap_bars)
+        self.atr = ATR(params.atr_period)
+        self.trend = EMA(params.trend_ema) if params.trend_ema else None
+
+    def on_bar(self, bar: Bar) -> SignalDraft | None:
+        p = self.params
+        high, low, close, volume = float(bar.high), float(bar.low), float(bar.close), float(bar.volume)
+        atr = self.atr.update(high, low, close)
+        trend = self.trend.update(close) if self.trend else None
+        self.pv.update((high + low + close) / 3 * volume)
+        self.vol.update(volume)
+        if not self.pv.full or atr is None or sum(self.vol.values) <= 0:
+            return None
+        if self.trend is not None and (trend is None or close <= trend):
+            return None
+        vwap = sum(self.pv.values) / sum(self.vol.values)
+        if close > vwap - p.entry_atr * atr:
+            return None
+        stop = close - p.atr_stop_mult * atr
+        return SignalDraft(Side.LONG, close, stop, vwap, {"vwap": vwap, "atr": atr, "deviation_atr": (vwap - close) / atr,
+                                                          "trend_ema": trend})
+
+
+class BtcRandomEntry(StrategyBase):
+    """Long-only random-entry control for BTC/USDT spot (seeded, reproducible), with an ATR stop and
+    R target matching the candidate it controls. Not a trading candidate."""
+
+    strategy_id = "btc-baseline-random"
+    version = "1.0.0"
+    market = Market.BTCUSDT_BINANCE_SPOT
+
+    def __init__(self, params, **kwargs):
+        from trading.strategies.baselines import RandomEntryBaseline
+        super().__init__(params, **kwargs)
+        if params.long_probability != 1.0:
+            raise ValueError("Spot controls are long-only (long_probability must be 1.0)")
+        self.inner = RandomEntryBaseline(params, tick_size=self.tick, dataset_id=self.dataset_id)
+
+    def on_bar(self, bar: Bar) -> SignalDraft | None:
+        return self.inner.on_bar(bar)

@@ -133,6 +133,32 @@ class BinanceReadOnlyClient:
         data = self._request("/api/v3/ticker/bookTicker", {"symbol": symbol})
         return Quote.create(symbol=symbol, bid=data["bidPrice"], ask=data["askPrice"], time=stamp)
 
+    def closed_klines(self, start: datetime, end: datetime, *, symbol: str = "BTCUSDT", interval: str = "1h",
+                      now: datetime | None = None) -> list:
+        """Closed candles with open time in [start, end) as `Bar`s (UTC). The still-forming candle is dropped;
+        pagination stops at `end`. Gaps are not filled (callers detect and record them)."""
+        from trading.marketdata import INTERVALS, Bar
+        step = INTERVALS[interval]
+        now = now or self.server_time()
+        bars, cursor = [], start
+        while cursor < end:
+            page = self._request("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": 1000,
+                                                    "startTime": int(cursor.timestamp() * 1000),
+                                                    "endTime": int(end.timestamp() * 1000) - 1})
+            if not page:
+                break
+            for row in page:
+                opened = datetime.fromtimestamp(int(row[0]) / 1000, timezone.utc)
+                if opened < cursor or opened >= end or opened + step > now:
+                    continue
+                bars.append(Bar.create(symbol=symbol, interval=interval, open_time=opened, open=row[1], high=row[2],
+                                       low=row[3], close=row[4], volume=row[5]))
+            following = datetime.fromtimestamp(int(page[-1][0]) / 1000, timezone.utc) + step
+            if following <= cursor:
+                break
+            cursor = following
+        return bars
+
     # -- signed testnet (read-only) ------------------------------------------------------------
     def account(self) -> dict:
         """Balances, permissions and commission rates. Returned without any credential material."""
