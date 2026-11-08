@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "title": "Phase 2E pre-registered BTC/USDT shadow forward test (simulation only, no orders)",
+  "registered_at": "2026-11-08T06:00:00+00:00",
+  "data": "Binance spot BTCUSDT: closed 1h klines (REST data-api.binance.vision) and best bid/ask (WebSocket data-stream.binance.vision, REST fallback)",
+  "unseen_window_starts": "2026-11-09T00:00:00+00:00",
+  "research_basis": {
+    "report": "research/output/phase2e_btcusdt_research.json (git-ignored output; summary in docs/phase2e-binance-shadow.md)",
+    "oos_span": [
+      "2019-07-03T04:00:00+00:00",
+      "2026-05-03T04:00:00+00:00"
+    ],
+    "walk_forward_windows": 41,
+    "excluded": "Phase 2B holdout 2026-05-24 -> 2026-11 (previously examined)"
+  },
+  "candidates": [
+    {
+      "key": "donchian",
+      "strategy_id": "btc-donchian",
+      "version": "1.0.0",
+      "params": {
+        "entry_lookback": 96,
+        "atr_period": 14,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0
+      },
+      "params_hash": "1fe243096a627b34",
+      "max_holding_bars": 72,
+      "role": "candidate",
+      "rationale": "Only new candidate whose entries beat 18/20 frequency- and exit-matched random seeds out of sample (OOS 593 trades, gross 0.1225 R, net -0.0197 R); weak evidence."
+    },
+    {
+      "key": "ema_trend",
+      "strategy_id": "btc-trend",
+      "version": "1.0.0",
+      "params": {
+        "ema_fast": 50,
+        "ema_slow": 200,
+        "momentum_bars": 24,
+        "adx_period": 14,
+        "adx_min": 18.0,
+        "atr_period": 14,
+        "max_atr_pct": 3.0,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0
+      },
+      "params_hash": "96ba7f762bf1d783",
+      "max_holding_bars": null,
+      "role": "trend control",
+      "rationale": "Phase 2B trend strategy, re-selected on 2019-2026 research data; beats only 7/20 random seeds (edge = long beta). Monitored as the trend benchmark."
+    },
+    {
+      "key": "kronos",
+      "strategy_id": "btc-kronos",
+      "version": "1.0.0",
+      "params": {
+        "min_edge_bps": 20.0,
+        "trend_ema": 200,
+        "atr_period": 14,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": null
+      },
+      "params_hash": "ccb1ff62566a9aeb",
+      "max_holding_bars": 1,
+      "role": "monitored model (research-rejected as a strategy)",
+      "rationale": "KR-05 parameters (never tuned): gross +0.012 R/trade, net -0.167 R (CI excludes 0) because 1-hour holds pay fees on every bar; monitored so live Kronos forecasts and their trading value are measured, not promoted."
+    }
+  ],
+  "controls": {
+    "donchian": {
+      "params": {
+        "entry_probability": 0.00991,
+        "atr_period": 14,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0,
+        "long_probability": 1.0
+      },
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "max_holding_bars": 72,
+      "role": "long-only random entries with donchian's exit structure and research trade frequency"
+    },
+    "kronos": {
+      "params": {
+        "entry_probability": 0.1196,
+        "atr_period": 14,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": null,
+        "long_probability": 1.0
+      },
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "max_holding_bars": 1,
+      "role": "long-only random entries with kronos's exit structure and research trade frequency"
+    }
+  },
+  "not_forward_tested": {
+    "vwap_reversion": "Negative before costs (-0.0556 R), net -0.2302 R with CI excluding 0, beats 0/20 random seeds, 0/16 configurations profitable."
+  },
+  "rules": {
+    "no_parameter_changes": true,
+    "risk_fraction": "0.005",
+    "daily_loss_halt_fraction": "0.015",
+    "aggregate_risk_fraction": "0.01",
+    "account_equity_usdt": "10000",
+    "fees": "taker 0.1% per side (Binance published base tier; not account-verified) and 0.2% stress",
+    "fills": "first best bid/ask update at or after the signal bar close; ask + 10 USDT slippage on entry; stops at bid - 10 USDT; targets at the limit; time exits at the last quote of the bar",
+    "spot": "long/flat only"
+  },
+  "evaluation": {
+    "fee_scenario": "0.001",
+    "success_criteria_all_required": [
+      "net mean R per trade > 0 under the 0.1% fee scenario",
+      "bootstrap 95% CI lower bound of net mean R > -0.05",
+      "candidate per-trade net R above the median of its matched random-entry controls",
+      "positive net result in at least 2 of the latest 3 complete two-month blocks",
+      "max drawdown < 6% of equity at 0.5% risk"
+    ],
+    "final_checkpoint_min_trades": 100,
+    "final_checkpoint_not_before": "2027-05-09T00:00:00+00:00",
+    "expected_duration_note": "Donchian traded ~85 times/year out of sample: 100 trades likely needs ~14 months. No verdict before both conditions hold.",
+    "failure": "Any criterion failing at the final checkpoint retires the candidate; no re-tuning on forward data."
+  }
+}

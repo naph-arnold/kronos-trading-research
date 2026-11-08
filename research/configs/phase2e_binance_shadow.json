@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "name": "phase2e-btcusdt-binance-shadow",
+  "preregistration": "research/forward_test/phase2e_btcusdt_preregistration.json",
+  "preregistration_sha256": "dc2a958870645ade40dcf9fb41181f756508bbb216d652560e976fe5ebdbf965",
+  "simulation_only": true,
+  "state_dir": "state/phase2e_binance_shadow",
+  "warmup_start": "2026-08-01T00:00:00+00:00",
+  "equity": "10000",
+  "fee_scenarios": [
+    "0.001",
+    "0.002"
+  ],
+  "tick_size": "0.01",
+  "fee_convention": "taker fee rate per side applied to entry and exit notional (BinanceSpotSpec.round_trip_cost); ASSUMPTION - not account-verified",
+  "fallback_half_spread_usdt": "5",
+  "candidates": {
+    "donchian": {
+      "params": {
+        "entry_lookback": 96,
+        "atr_period": 14,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0
+      },
+      "max_holding_bars": 72
+    },
+    "ema_trend": {
+      "params": {
+        "ema_fast": 50,
+        "ema_slow": 200,
+        "momentum_bars": 24,
+        "adx_period": 14,
+        "adx_min": 18.0,
+        "atr_period": 14,
+        "max_atr_pct": 3.0,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0
+      },
+      "max_holding_bars": null
+    },
+    "kronos": {
+      "params": {
+        "min_edge_bps": 20.0,
+        "trend_ema": 200,
+        "atr_period": 14,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": null
+      },
+      "max_holding_bars": 1
+    }
+  },
+  "random_controls": {
+    "donchian": {
+      "params": {
+        "entry_probability": 0.00991,
+        "atr_period": 14,
+        "atr_stop_mult": 2.5,
+        "reward_to_risk": 3.0,
+        "long_probability": 1.0
+      },
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "max_holding_bars": 72,
+      "role": "long-only random entries with donchian's exit structure and research trade frequency"
+    },
+    "kronos": {
+      "params": {
+        "entry_probability": 0.1196,
+        "atr_period": 14,
+        "atr_stop_mult": 1.5,
+        "reward_to_risk": null,
+        "long_probability": 1.0
+      },
+      "seeds": [
+        1,
+        2,
+        3
+      ],
+      "max_holding_bars": 1,
+      "role": "long-only random entries with kronos's exit structure and research trade frequency"
+    }
+  },
+  "risk": {
+    "risk_fraction": "0.005",
+    "daily_loss_halt_fraction": "0.015",
+    "aggregate_risk_fraction": "0.01",
+    "max_spread_usdt": "100",
+    "slippage_allowance_usdt": "10",
+    "max_entry_deviation_fraction": "0.005"
+  },
+  "health": {
+    "max_quote_age_s": 15,
+    "max_quote_gap_s": 60,
+    "abnormal_spread_multiple": "100",
+    "max_status_age_min": 15
+  },
+  "calendar": {
+    "official_providers": true,
+    "cpi_nfp_file": "research/forward_test/calendar/us_cpi_nfp_bls_2026_2027.json",
+    "cpi_nfp_provider": "bls.gov/schedule",
+    "refresh_hours": 12
+  },
+  "runner": {
+    "poll_seconds": 2,
+    "max_decision_latency_s": 30,
+    "spec_refresh_hours": 12,
+    "kline_settle_s": 3,
+    "max_kline_lag_s": 300,
+    "max_clock_offset_s": 2,
+    "ws_stale_s": 10,
+    "max_buffer": 200000,
+    "heartbeat_seconds": 60,
+    "exchange_status_minutes": 5,
+    "clock_sync_minutes": 10
+  }
+}
