@@ -1,6 +1,6 @@
 # Kronos Trading Bot — Verified Progress
 
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 ## Approved decisions
 - XAUUSD via MetaTrader 5 demo and BTC/USDT via Binance Spot Testnet.
@@ -530,6 +530,55 @@ Monitor both runners (`status`/`report` weekly). Decide on the XAUUSD heartbeat 
 authorized. No parameter changes during the evaluations.
 
 ---
+
+## Milestone: XAUUSD Selective Strategy A shadow validation prepared (2026-11-09)
+
+Branch `feat/xau-selective-a-shadow-prep` (based on `research/volume-profile`, PR #20, with `ops/dual-runner-reliability`,
+PR #16, merged in for the hardened XAUUSD runner). Details: `docs/xau-selective-a-shadow.md`.
+
+**Status: prepared and tested; NOT launched.** Launch requires operator approval. No orders. The Phase 2D/2E runners,
+their code (`research/phase2d_shadow.py`, `trading/shadow/engine.py` unchanged), parameters, pre-registrations, state
+and accounts are untouched.
+
+- Implemented:
+  - `trading/mtf/shadow_adapter.py`: Strategy A on M5 bars via the unchanged `selective_candidates`, plus
+    `net_rr_check`, the research fill-time rule net RR ≥ 2.0.
+  - `research/xau_selective_a_shadow.py`: an engine subclass whose checks can only reject; a runner subclass of the
+    hardened Phase 2D runner; the criteria evaluator; and a CLI whose `run` refuses without `--i-have-launch-approval`.
+  - `research/forward_test/xau_selective_a_preregistration.json`: unseen start 2026-11-16 00:00 UTC; 2025-06 →
+    2026-11-08 explicitly excluded as evidence.
+  - `research/configs/xau_selective_a_shadow.json`: own state `state/xau_selective_a_shadow`; 24 books.
+- Verified:
+  - `tests/test_xau_selective_a_shadow.py`: 13 passed.
+  - Adapter parity on examined 2025-08 → 2025-09 real M5 data: 181/181 candidates identical (mechanics check, not
+    evidence).
+- Blocked or pending:
+  - operator launch approval;
+  - MT5 multi-client probe (needs approval);
+  - memory headroom (1.40 GB free on 2026-11-08 with two runners plus research jobs);
+  - supervisor task and health-report coverage for a third runner (ops changes).
+
+## Milestone: Shadow runner verification before the 2026-11-09 forward start (2026-11-09)
+
+Read-only checks: `research.dual_health_report` over 1/6/12/24 h, process list, Task Scheduler, both SQLite stores.
+
+- **XAUUSD NY ORB (Phase 2D):**
+  - Runner pid 35948 under the `Kronos Shadow XAUUSD` task.
+  - 100% heartbeat uptime over the last 6 h; 98.4% over 12 h.
+  - One 11.6-minute gap at 13:18–13:30 UTC on 2026-11-08: the previous runner exited without a traceback and the
+    supervisor task restarted it at its next 15-minute trigger. The cause was not determined (no Windows
+    resource-exhaustion or shutdown events).
+  - Pre-registration consistent; 28 books, all flat at their initial equity; reconciliation ok.
+  - The MT5 demo account is unchanged (balance 3,000, 0 positions, 0 orders).
+  - Entries are correctly blocked while the market is closed. The server-clock offset cannot be verified without a
+    fresh tick (fail closed); this should clear at the Sunday open (23:00 UTC).
+- **BTC/USDT Donchian (Phase 2E):**
+  - Runner pid 5264. 100% uptime since 2026-11-08 04:45 UTC, with no gaps over 3 minutes.
+  - Websocket connected; fresh data 99.8–100%.
+  - Pre-registration consistent; 18 books flat.
+- The earlier gaps in the 24-hour window are the approved runner restarts of 2026-11-07/08 (power/task changes).
+- To verify after the Sunday open: the XAUUSD session calendar becomes `broker_verified` and fresh market data
+  resumes.
 
 ## Milestone: Volume Profile value-area research, vp-v1 (2026-11-08)
 
