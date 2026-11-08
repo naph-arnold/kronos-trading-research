@@ -179,6 +179,20 @@ def process_aggtrades_csv(stream, base_bin: float, state: dict, *, chunksize: in
                          dtype={"agg_id": np.int64, "price": np.float64, "qty": np.float64, "first_id": np.int64,
                                 "last_id": np.int64, "ts": np.int64})
     for ch in reader:
+        # Exact re-sent rows (an aggregate id at or below the highest id already seen) are counted and dropped;
+        # the first copy is kept. Observed once: 2026-02-11 00:00-00:04 UTC, ids 3856672511-3856674510 repeated
+        # (3,000 extra copies, identical in every field). Nothing is filled or invented.
+        aid_all = ch.agg_id.to_numpy()
+        seen = state.get("max_agg_id")
+        run_max = np.maximum.accumulate(np.concatenate([[-1 if seen is None else seen], aid_all]))[:-1]
+        dup = aid_all <= run_max
+        state["duplicate_rows_dropped"] = state.get("duplicate_rows_dropped", 0) + int(dup.sum())
+        if dup.any():
+            state.setdefault("duplicate_examples", []).append([int(aid_all[dup].min()), int(aid_all[dup].max()), int(dup.sum())])
+            ch = ch[~dup]
+        state["max_agg_id"] = int(max(run_max[-1], aid_all[-1])) if len(aid_all) else seen
+        if ch.empty:
+            continue
         aid, fid, lid = ch.agg_id.to_numpy(), ch.first_id.to_numpy(), ch.last_id.to_numpy()
         ts = ch.ts.to_numpy()
         ts = np.where(ts > 10**14, ts // 1000, ts)  # microseconds (2025+) -> milliseconds

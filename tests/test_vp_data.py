@@ -56,3 +56,18 @@ def test_resource_guard_pauses_until_memory_recovers_and_stops_safely(monkeypatc
     with pytest.raises(MemoryError):
         g2.check("y")
     assert vd.ResourceGuard(status=lambda: None).check("z") is None
+
+
+def test_exact_resent_aggtrade_rows_are_dropped_once_and_counted():
+    import io
+
+    from research.vp_data import process_aggtrades_csv
+    rows = [b"1,100.0,1,1,1,1700000000000,True,True", b"2,100.0,2,2,2,1700000001000,True,True",
+            b"3,101.0,4,3,3,1700000002000,True,True", b"2,100.0,2,2,2,1700000001000,True,True",
+            b"3,101.0,4,3,3,1700000002000,True,True", b"4,102.0,8,4,4,1700000003000,True,True"]
+    st = {k: 0 for k in ("agg_id_gaps", "agg_ids_missing", "trade_id_gaps", "trade_ids_missing", "ts_decreasing",
+                         "invalid_rows", "rows", "trades")}
+    st.update(last_agg_id=None, last_trade_id=None, last_ts=None, first_ts=None)
+    (b, k, w), mins = process_aggtrades_csv(io.BytesIO(b"\n".join(rows) + b"\n"), 1.0, st, chunksize=2)
+    assert st["duplicate_rows_dropped"] == 2 and st["agg_id_gaps"] == 0 and st["ts_decreasing"] == 0
+    assert w.sum() == 15.0 and st["rows"] == 4

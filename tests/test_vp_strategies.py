@@ -120,3 +120,12 @@ def test_protocol_grid_and_risk_are_frozen():
     sizes = {v: len(variant_grid(proto, v)) for v in proto["variants"]}
     assert sizes == {"A": 24, "A_4H": 24, "B": 24, "B_4H": 24} and sum(sizes.values()) == proto["trials_per_market"]
     assert all(g.htf_filter for g in variant_grid(proto, "B_4H")) and not any(g.htf_filter for g in variant_grid(proto, "A"))
+
+
+def test_btc_2017_2018_preregistration_is_frozen_and_labelled():
+    from trading.vp.strategies import VPParams
+    pre = json.loads(Path("research/forward_test/vp_btc_2017_2018_preregistration.json").read_text())
+    v = {k: VPParams(**x) for k, x in pre["frozen_variants"].items()}
+    assert set(v) == {"A", "A_4H", "B", "B_4H"} and v["A_4H"].htf_filter and not v["B"].htf_filter
+    assert "not chronological forward validation" in pre["label"] and pre["written_before_download"]
+    assert pre["methodology"]["risk"]["max_intended_risk_per_trade"] == 0.005 and pre["methodology"]["single_run"]
