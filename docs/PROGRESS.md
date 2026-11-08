@@ -571,7 +571,7 @@ Details: `docs/volume-profile-feasibility.md`, `docs/volume-profile-research.md`
 
   Volume levels never beat time-at-price or prior-range levels (all CIs include 0).
 - **Decision:** not supported; gold Volume Profile closed; **no shadow test proposed**.
-- **Tests:** `tests/test_vp_profile.py` (18), `tests/test_vp_strategies.py` (10), `tests/test_vp_data.py` (7).
+- **Tests:** `tests/test_vp_profile.py` (18), `tests/test_vp_strategies.py` (10), `tests/test_vp_data.py` (6).
 
 ## Milestone: XAUUSD 4H-led scalping on unexamined 2019-2020 history (2026-11-08)
 
