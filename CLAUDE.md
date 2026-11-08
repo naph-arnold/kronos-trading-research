@@ -19,6 +19,12 @@ Before making changes, read:
 - **No AI bypass.** Agent, Kronos and TradingView outputs are advisory inputs recorded for provenance. Only `trading.risk.evaluate` (via `trading.gate.PreTradeGate`) can approve a demo order; no agent consensus, prompt or tool call may skip, override or relax it.
 - Proposed additional per-account guardrails to test: daily drawdown halt 1.5%, aggregate stop-risk 1%; avoid presenting as validated strategies.
 
+## Python-first architecture decision (ADR-001)
+- Read `docs/adr/001-python-first-optional-mql5.md` before modifying connectors, orchestration, strategy testing or execution.
+- Python remains the central engine. MT5 XAUUSD data and Binance BTCUSDT data/testing use separate **Python read-only** pipelines during current research and shadow phases.
+- Finish and verify both independent shadow pipelines before considering new execution adapters. Do not modify frozen XAUUSD shadow parameters when developing crypto.
+- MQL5 is optional **later** only if a documented Python-versus-MQL5 comparison demonstrates native MT5 testing/execution benefits and Phase 3 demo execution is separately approved. No MQL5 order code now; no AI or TradingView bypass of risk controls.
+
 ## Workflow on every session
 1. Check `git status`, branch and repository state; do not overwrite uncommitted user work.
 2. Read the docs listed above; independently verify claimed completed work in source and tests.

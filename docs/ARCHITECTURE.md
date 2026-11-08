@@ -22,6 +22,10 @@ Status: **Design approved, implementation not verified** (2026-11-06).
 
 Rules: no other LLM provider acts as a trading agent; Grok agents consume Kronos output rather than forecasting prices themselves; all AI outputs are recorded in the audit trail as `advisory` inputs and are never passed to the risk engine; when Grok is unavailable the system degrades to no-trade or non-AI baselines, never to relaxed limits.
 
+## Python-first platform decision
+**Authoritative:** [ADR-001: Python-first, MQL5 by evidence only](adr/001-python-first-optional-mql5.md).
+Python owns the shared orchestration, Kronos/Grok integration, strategy/risk evaluation, data integrity, audit and monitoring. The **current** MT5/XAUUSD and Binance/BTCUSDT pathways are separately tested, read-only Python market-data/research/shadow components. Only simulated shadow fills are permitted; no actual venue orders during research. Native MQL5 execution or testing is deferred until the documented comparison and explicit authorization gate.
+
 ## Logical flow
 Market data (MT5, Binance, TradingView) -> normalization and freshness validation -> strategy-specific candidate signal -> Kronos/Grok enrichment and adversarial review -> deterministic risk checks -> *separate* demo execution adapters -> order reconciliation and audit -> monitoring.
 
