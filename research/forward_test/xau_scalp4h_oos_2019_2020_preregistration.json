@@ -1,0 +1,123 @@
+{
+  "title": "XAUUSD 4H-led scalping (scalp4h-v1): frozen out-of-sample evaluation on 2019-2020 tick-built M1 history",
+  "registered_at": "2026-11-08",
+  "research_only": true,
+  "orders": "none",
+  "why_this_period": "Every XAUUSD dataset examined before this registration starts on or after 2022-09-01 (M15/H1 Phase 2/2A, M5 2025-06, M1 2026-07). The broker serves tick history for 2019-01..2020-12 (2021-01..2025-04 unavailable); bar history is capped by the terminal's 100,000 max-bars setting, and raising it requires an MT5 restart (not approved).",
+  "data": {
+    "source": "MetaQuotes-Demo XAUUSD ticks via trading.connectors.mt5 (read-only, copy_ticks_range, COPY_TICKS_INFO)",
+    "bars": "M1 built from bid ticks (OHLC of bid; tick_volume = tick count; spread_points = minimum spread in the minute)",
+    "evaluation_span_utc": [
+      "2019-01-01T00:00:00+00:00",
+      "2021-01-01T00:00:00+00:00"
+    ],
+    "warmup": "candidates before 2019-02-01 are excluded (4H EMA50 warm-up); evaluation window is 2019-02-01..2020-12-31",
+    "validation_before_evaluation": [
+      "tick-built M1 vs broker M1 on an overlap window (2026-08)",
+      "tick-built H1 vs broker H1 bars for 2019-2020",
+      "timestamps (UTC, minute-aligned, monotonic, no duplicates)",
+      "daily break and weekend structure consistent with 17:00 New York close",
+      "missing minutes vs CME Globex gold calendar",
+      "spread distribution by New York hour",
+      "price sanity"
+    ],
+    "abort_if": "tick-built bars disagree materially with broker bars or the server time conversion cannot be confirmed; then the limitation is documented and a prospective shadow test is proposed instead"
+  },
+  "frozen_variants": {
+    "B": {
+      "strategy": "trading.mtf.strategies.scalp_candidates (H1-led, unchanged)",
+      "params": {
+        "reward_to_risk": 2.0,
+        "pull_atr": 0.5,
+        "trigger_bars": 5
+      },
+      "other_params": "ScalpParams defaults"
+    },
+    "B4H_only": {
+      "strategy": "trading.mtf.scalp4h.scalp4h_candidates, h1_confirm=False",
+      "params": {
+        "reward_to_risk": 1.75,
+        "pull_atr": 0.5,
+        "trigger_bars": 5
+      },
+      "other_params": "Scalp4HParams defaults"
+    },
+    "B4H": {
+      "strategy": "trading.mtf.scalp4h.scalp4h_candidates, h1_confirm=True (primary)",
+      "params": {
+        "reward_to_risk": 2.5,
+        "pull_atr": 0.5,
+        "trigger_bars": 5
+      },
+      "other_params": "Scalp4HParams defaults"
+    }
+  },
+  "frozen_from": "most-selected walk-forward parameters per variant in research/output/mtf/scalp4h_v1/xauusd.json (2026-07-27..2026-11-06). No re-selection on 2019-2020.",
+  "account": {
+    "initial_equity": 10000,
+    "eligibility_check_equity": 3000,
+    "max_intended_risk_per_trade": 0.005,
+    "daily_loss_halt": 0.015,
+    "max_aggregate_open_risk": 0.01,
+    "risk_engine": "trading.risk.evaluate (unchanged)",
+    "event_blackouts": "scheduled FOMC decisions 2019-2020 from federalreserve.gov fomchistorical pages (unscheduled/notation votes excluded: not knowable in advance)"
+  },
+  "costs": {
+    "base": {
+      "commission_per_lot_round_trip": 0,
+      "slippage": 0.1,
+      "spread": "2026 tick-spread p50 by New York hour (identical to previous XAU research)"
+    },
+    "stress_grid": {
+      "commission_per_lot_round_trip": [
+        0,
+        7,
+        14
+      ],
+      "slippage": [
+        0.1,
+        0.3,
+        0.5
+      ],
+      "spread": "2026 p50 profile"
+    },
+    "historical_spread": {
+      "spread": "2019-2020 tick-measured p50 and p90 by New York hour",
+      "commission": 0,
+      "slippage": 0.1
+    },
+    "note": "the same cost scenarios are applied to all three variants"
+  },
+  "metrics": [
+    "trades",
+    "net return %",
+    "mean R with 95% bootstrap CI",
+    "gross R",
+    "cost R",
+    "win rate",
+    "profit factor",
+    "max drawdown % and duration",
+    "worst month",
+    "longest losing streak",
+    "per-year and per-quarter results",
+    "regimes",
+    "sessions",
+    "matched random entries (20 seeds, per variant)",
+    "B4H - B and B4H - B4H_only mean R differences with bootstrap CI",
+    "3,000-account eligibility",
+    "research halts (weekly 3%, consecutive 3, session cap 2)",
+    "diagnostic only: the full 12-point grid per variant (never used to choose parameters)"
+  ],
+  "decision_rule_B4H": {
+    "supported_only_if_all": [
+      "base mean R > 0 and its 95% CI lower bound > 0",
+      "net return > 0 with commission 7 per lot and slippage 0.30",
+      "mean R above at least 18 of 20 matched random runs",
+      "mean R > 0 in both 2019 and 2020"
+    ],
+    "improvement_over_B_claimed_only_if": "B4H - B mean R difference has a 95% CI lower bound > 0",
+    "if_supported": "grounds only for a separately approved, pre-registered prospective shadow test; not for trading",
+    "if_not_supported": "the 4H-led scalper is not validated; no re-tuning on 2019-2020"
+  },
+  "single_run": "the evaluation is run once on the frozen variants; any code fix after the first run is disclosed with both results"
+}
