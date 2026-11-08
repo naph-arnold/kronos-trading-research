@@ -73,6 +73,82 @@ def _group_bins(bucket: np.ndarray, bins: np.ndarray, w: np.ndarray) -> tuple[np
             df.to_numpy(np.float64))
 
 
+# ------------------------------------------------------------------------------------------ resource guards
+
+def memory_status() -> dict | None:
+    """System memory (Windows GlobalMemoryStatusEx) and this process's peak working set; None elsewhere."""
+    import ctypes
+    import sys
+    if sys.platform != "win32":
+        return None
+
+    class _M(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    class _P(ctypes.Structure):
+        _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong), ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t), ("a", ctypes.c_size_t), ("b", ctypes.c_size_t),
+                    ("c", ctypes.c_size_t), ("d", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t)]
+    m = _M()
+    m.dwLength = ctypes.sizeof(_M)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+    p = _P()
+    p.cb = ctypes.sizeof(_P)
+    ctypes.windll.psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(p), p.cb)
+    gb = 2 ** 30
+    return {"load_pct": int(m.dwMemoryLoad), "avail_gb": round(m.ullAvailPhys / gb, 2), "total_gb": round(m.ullTotalPhys / gb, 2),
+            "proc_ws_gb": round(p.WorkingSetSize / gb, 2), "proc_peak_ws_gb": round(p.PeakWorkingSetSize / gb, 2)}
+
+
+def set_background_priority() -> bool:
+    """Lower this process's CPU, I/O and memory priority (Windows PROCESS_MODE_BACKGROUND_BEGIN)."""
+    import ctypes
+    import sys
+    if sys.platform != "win32":
+        import os
+        os.nice(10)
+        return True
+    k = ctypes.windll.kernel32
+    return bool(k.SetPriorityClass(k.GetCurrentProcess(), 0x00100000))
+
+
+class ResourceGuard:
+    """Pauses work while available memory is below `min_avail_gb` (resumes above `resume_gb`); gives up after
+    `max_wait_s` so the caller can stop safely with completed shards preserved."""
+
+    def __init__(self, min_avail_gb: float = 1.0, resume_gb: float = 1.5, max_wait_s: int = 1800, status=memory_status):
+        self.min_avail_gb, self.resume_gb, self.max_wait_s, self.status = min_avail_gb, resume_gb, max_wait_s, status
+        self.pauses, self.min_seen_gb, self.peak_proc_gb = 0, None, 0.0
+
+    def check(self, where: str = "") -> None:
+        s = self.status()
+        if s is None:
+            return
+        self.min_seen_gb = s["avail_gb"] if self.min_seen_gb is None else min(self.min_seen_gb, s["avail_gb"])
+        self.peak_proc_gb = max(self.peak_proc_gb, s["proc_peak_ws_gb"])
+        if s["avail_gb"] >= self.min_avail_gb:
+            return
+        self.pauses += 1
+        print(f"memory low ({s['avail_gb']} GB available) at {where}: pausing", flush=True)
+        waited = 0
+        while waited < self.max_wait_s:
+            time.sleep(15)
+            waited += 15
+            s = self.status()
+            if s["avail_gb"] >= self.resume_gb:
+                print(f"memory recovered ({s['avail_gb']} GB): resuming", flush=True)
+                return
+        raise MemoryError(f"available memory stayed below {self.resume_gb} GB for {self.max_wait_s}s; stopped safely")
+
+    def summary(self) -> dict:
+        return {"pauses": self.pauses, "min_available_gb": self.min_seen_gb, "peak_process_working_set_gb": self.peak_proc_gb,
+                "thresholds_gb": [self.min_avail_gb, self.resume_gb]}
+
+
 # ------------------------------------------------------------------------------------------ Binance BTC/USDT
 
 def _get(url: str) -> bytes:
@@ -87,7 +163,7 @@ def _get(url: str) -> bytes:
     raise RuntimeError("unreachable")
 
 
-def process_aggtrades_csv(stream, base_bin: float, state: dict, *, chunksize: int = 4_000_000):
+def process_aggtrades_csv(stream, base_bin: float, state: dict, *, chunksize: int = 4_000_000, on_chunk=None):
     """Aggregate one month of aggTrades rows. `state` carries continuity across months
     (last agg id / last trade id / last timestamp) and accumulates integrity counters."""
     first = stream.readline()
@@ -110,6 +186,7 @@ def process_aggtrades_csv(stream, base_bin: float, state: dict, *, chunksize: in
             gap = np.concatenate([[0], np.diff(aid) - 1])
         tgap = (fid - prev_lid - 1) if prev_lid is not None else np.concatenate([[0], fid[1:] - lid[:-1] - 1])
         state["agg_id_gaps"] += int((gap != 0).sum())
+        state["agg_id_duplicates_or_reversals"] = state.get("agg_id_duplicates_or_reversals", 0) + int((gap < 0).sum())
         state["agg_ids_missing"] += int(gap[gap > 0].sum())
         state["trade_id_gaps"] += int((tgap != 0).sum())
         state["trade_ids_missing"] += int(tgap[tgap > 0].sum())
@@ -128,6 +205,8 @@ def process_aggtrades_csv(stream, base_bin: float, state: dict, *, chunksize: in
         m = pd.DataFrame({"m": ts // 60_000, "p": price, "q": qty}).groupby("m", sort=True)
         parts_min.append(pd.DataFrame({"volume": m.q.sum(), "high": m.p.max(), "low": m.p.min(), "first": m.p.first(),
                                        "last": m.p.last(), "n": m.p.size()}))
+        if on_chunk is not None:
+            on_chunk()
     b = np.concatenate([p[0] for p in parts_bins])
     k = np.concatenate([p[1] for p in parts_bins])
     w = np.concatenate([p[2] for p in parts_bins])
@@ -165,6 +244,18 @@ def cmd_btc(a) -> dict:
     out = Path(a.output)
     parts = out.with_name(out.name + "_parts")  # one shard per month: resumable, bounded memory
     parts.mkdir(parents=True, exist_ok=True)
+    for stale in parts.glob("*.partial"):  # incomplete download from an interrupted run
+        stale.unlink()
+        print("removed incomplete", stale.name, flush=True)
+    if a.background:
+        print("background priority:", set_background_priority(), flush=True)
+    guard = ResourceGuard(a.min_avail_gb, a.resume_gb)
+    progress_path = parts / "progress.json"
+    progress = json.loads(progress_path.read_text()) if progress_path.exists() else {"events": []}
+
+    def note(event: dict):
+        progress["events"].append({"at": datetime.now(timezone.utc).isoformat(), **event, "memory": memory_status()})
+        progress_path.write_text(json.dumps(progress, indent=2))
     files = []
     for month in months:
         name = f"{a.symbol}-aggTrades-{month}.zip"
@@ -177,6 +268,18 @@ def cmd_btc(a) -> dict:
                 files.append(meta["file"])
                 print(month, "resumed from shard", flush=True)
                 continue
+        import shutil
+        import subprocess
+        free_gb = shutil.disk_usage(parts).free / 2 ** 30
+        if free_gb < a.min_free_disk_gb:
+            note({"month": month, "status": "stopped", "reason": f"free disk {free_gb:.1f} GB < {a.min_free_disk_gb}"})
+            raise SystemExit(f"insufficient disk space ({free_gb:.1f} GB); completed shards preserved")
+        if a.health_cmd:
+            hc = subprocess.run(a.health_cmd, shell=True, capture_output=True, text=True)
+            if hc.returncode != 0:
+                note({"month": month, "status": "stopped", "reason": "shadow-runner health gate failed", "output": hc.stdout[-2000:]})
+                raise SystemExit("shadow-runner health gate failed; download stopped, completed shards preserved")
+        guard.check(f"{month} start")
         url = f"{AGG_BASE}/{a.symbol}/{name}"
         t0 = time.time()
         tmp = parts / (name + ".partial")
@@ -192,7 +295,13 @@ def cmd_btc(a) -> dict:
             raise ValueError(f"{name}: checksum mismatch")
         before = dict(state)
         with zipfile.ZipFile(tmp) as z, z.open(name.replace(".zip", ".csv")) as stream:
-            (b, k, w), mins = process_aggtrades_csv(stream, a.base_bin, state, chunksize=2_000_000)
+            try:
+                (b, k, w), mins = process_aggtrades_csv(stream, a.base_bin, state, chunksize=2_000_000,
+                                                        on_chunk=lambda: guard.check(month))
+            except MemoryError as exc:
+                note({"month": month, "status": "stopped", "reason": str(exc)})
+                tmp.unlink()
+                raise SystemExit(f"{exc}; completed shards preserved")
         tmp.unlink()
         np.savez_compressed(shard, bucket_ms=b, bin=k, w=w, minute=mins.index.to_numpy(np.int64),
                             **{f"m_{c}": mins[c].to_numpy() for c in mins.columns})
@@ -202,6 +311,7 @@ def cmd_btc(a) -> dict:
         meta_path.write_text(json.dumps({"base_bin": a.base_bin, "shard_sha256": _sha_file(shard), "file": fmeta,
                                          "state_after": state}, indent=2))
         files.append(fmeta)
+        note({"month": month, "status": "completed", "seconds": round(time.time() - t0), **fmeta})
         del b, k, w, mins
         print(month, fmeta["rows"], f"{time.time() - t0:.0f}s", flush=True)
     B, K, W, MIN = [], [], [], []
@@ -219,6 +329,11 @@ def cmd_btc(a) -> dict:
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(mpath, minute=mins.index.to_numpy(np.int64), **{c: mins[c].to_numpy() for c in mins.columns})
     integrity = {k2: v for k2, v in state.items() if k2 not in ("last_agg_id", "last_trade_id", "last_ts")}
+    gaps = np.diff(mins.index.to_numpy(np.int64))
+    big = np.flatnonzero(gaps > 5)
+    integrity["no_trade_gaps_over_5min"] = [[datetime.fromtimestamp(int(mins.index[i] + 1) * 60, timezone.utc).isoformat(),
+                                             int(gaps[i] - 1)] for i in big]
+    integrity["resources"] = guard.summary()
     manifest = {"schema_version": 1, "market": "BTCUSDT", "source": "data.binance.vision monthly aggTrades (public, no credentials)",
                 "weight_kind": "traded_base_qty", "weight_definition": WEIGHT_KINDS["traded_base_qty"],
                 "base_bin": a.base_bin, "months": months, "files": files, "integrity": integrity,
@@ -376,6 +491,11 @@ def main() -> None:
     b.add_argument("--last", required=True)
     b.add_argument("--base-bin", type=float, required=True)
     b.add_argument("--output", required=True)
+    b.add_argument("--background", action="store_true", help="lower CPU/I-O/memory priority")
+    b.add_argument("--min-avail-gb", type=float, default=1.0)
+    b.add_argument("--resume-gb", type=float, default=1.5)
+    b.add_argument("--min-free-disk-gb", type=float, default=10.0)
+    b.add_argument("--health-cmd", help="command run before each month; non-zero exit stops the download safely")
     v = sub.add_parser("btc-validate")
     v.add_argument("--bins", required=True)
     v.add_argument("--klines", required=True)

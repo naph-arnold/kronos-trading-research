@@ -42,3 +42,17 @@ def test_btc_minutes_cross_check_against_klines():
     r = validate_btc_minutes(mins, kl, int(idx[0].value // 1e6), int(idx[-1].value // 1e6) + 60_000)
     assert r["minutes_compared"] == 3 and r["kline_minutes_with_volume_but_no_trades"] == 0
     assert r["volume_match_1e-6_pct"] == round(2 / 3 * 100, 4) and r["high_match_pct"] == 100.0
+
+
+def test_resource_guard_pauses_until_memory_recovers_and_stops_safely(monkeypatch):
+    import research.vp_data as vd
+    monkeypatch.setattr(vd.time, "sleep", lambda s: None)
+    seq = iter([0.5, 0.8, 2.0])
+    g = vd.ResourceGuard(1.0, 1.5, max_wait_s=60, status=lambda: {"avail_gb": next(seq), "proc_peak_ws_gb": 0.3})
+    g.check("x")
+    assert g.pauses == 1 and g.min_seen_gb == 0.5 and g.peak_proc_gb == 0.3
+    g2 = vd.ResourceGuard(1.0, 1.5, max_wait_s=30, status=lambda: {"avail_gb": 0.2, "proc_peak_ws_gb": 0.1})
+    import pytest
+    with pytest.raises(MemoryError):
+        g2.check("y")
+    assert vd.ResourceGuard(status=lambda: None).check("z") is None
