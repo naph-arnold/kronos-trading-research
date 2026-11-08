@@ -531,6 +531,22 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: 4H-led scalping hierarchy (scalp4h-v1, 2026-11-08)
+
+Branch `research/mtf-scalp4h` (stacked on `research/mtf-hybrid`). Research only; no orders; running shadow
+runners, frozen strategies and the original MTF results are unchanged (backup + SHA-256 verified). Details:
+`docs/mtf-scalp4h-research.md`.
+
+- Implemented: `trading/mtf/scalp4h.py` (new versioned strategy, mandatory completed-4H bias, 1H structure/momentum
+  confirmation, 15M context, 5M setup, 1M entry); `research/mtf_scalp4h_research.py`; per-market configs
+  `research/configs/mtf_scalp4h_v1_{btcusdt,xauusd}.json`; `tests/test_mtf_scalp4h.py` (9 tests).
+  Strategy A already used 4H direction and is unchanged. H1-led scalper `scalp_candidates` unchanged (baseline,
+  reproduced exactly).
+- BTC/USDT (17 OOS windows): B -0.145 R; 4H-only -0.168 R; 4H+1H -0.194 R (costs rise to 0.22 R). **Not improved.**
+- XAUUSD (exploratory, 2 windows, examined period): B -0.029 R; 4H-only -0.005 R; 4H+1H +0.048 R
+  (CI -0.166, +0.236), DD 18.8% -> 9.0%, stress -4.7%, gains only in down-trend regimes. **Unproven.**
+- Next (needs approval): unexamined XAU M1/M5 history (raise MT5 max bars) or a pre-registered shadow test.
+
 ## Milestone: Multi-timeframe hybrid research (2026-11-08)
 
 Branch `research/mtf-hybrid` (worktree `../kronos-mtf-research`, based on PR #14). Research only. The running

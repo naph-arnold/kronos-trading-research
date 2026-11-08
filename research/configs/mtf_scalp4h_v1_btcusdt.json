@@ -1,0 +1,67 @@
+{
+  "strategy_version": "scalp4h-v1",
+  "market": "btcusdt",
+  "research_only": true,
+  "orders": "none",
+  "hierarchy": [
+    "4h directional bias (mandatory)",
+    "1h structure + momentum confirmation",
+    "15m context",
+    "5m setup",
+    "1m entry"
+  ],
+  "variants": {
+    "B": "existing H1-led scalper (baseline, unchanged)",
+    "B4H_only": "4H bias mandatory, 1H level skipped (ablation)",
+    "B4H": "4H bias mandatory + 1H structure/momentum alignment (proposed hierarchy)"
+  },
+  "grid": {
+    "reward_to_risk": [
+      1.75,
+      2.0,
+      2.5
+    ],
+    "pull_atr": [
+      0.25,
+      0.5
+    ],
+    "trigger_bars": [
+      3,
+      5
+    ]
+  },
+  "fixed": {
+    "dir_ema": 50,
+    "dir_slope_bars": 3,
+    "struct_k": 2,
+    "h1_ema": 20,
+    "ctx_ema": 20,
+    "pull_bars": 3,
+    "min_net_rr": 1.5,
+    "max_hold_minutes": 60
+  },
+  "risk": {
+    "max_intended_risk_per_trade": 0.005,
+    "daily_loss_halt": 0.015,
+    "max_aggregate_open_risk": 0.01,
+    "enforced_by": "trading.risk.evaluate (unchanged)"
+  },
+  "random_seeds": 20,
+  "execution": "1m",
+  "span": [
+    "2023-01-01T00:00Z",
+    "2026-05-24T20:00Z"
+  ],
+  "walk_forward_months": {
+    "train": 6,
+    "test": 2
+  },
+  "min_train_trades": 20,
+  "allow_short": false,
+  "cost_scenarios": [
+    "base",
+    "stress",
+    "low_fee"
+  ],
+  "evidence_status": "out-of-sample walk-forward; the Phase 2B holdout and later data are excluded"
+}
