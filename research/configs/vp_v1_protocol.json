@@ -1,0 +1,58 @@
+{
+  "strategy_family": "volume-profile value-area (vp-v1)",
+  "status": "RESEARCH HYPOTHESES - not approved, not validated, no orders",
+  "written_before_any_strategy_result": true,
+  "risk": {"max_intended_risk_per_trade": 0.005, "daily_loss_halt": 0.015, "aggregate_open_risk": 0.01,
+           "engine": "trading.risk.evaluate (unchanged) via trading.mtf.simulator", "orders": "none"},
+  "hypotheses": {
+    "A_rejection": "Price trades beyond the prior completed profile's VAH (VAL), a completed candle closes back inside the value area; reversal toward POC or the opposite boundary has positive expectancy after costs.",
+    "B_breakout_retest": "A completed candle closes beyond VAH (VAL), price retests the broken boundary and the next completed candle still closes outside; continuation has positive expectancy after costs."
+  },
+  "profile": {"value_area_rows": 1, "bucket_minutes": 15, "max_level_age_days": 4,
+              "min_coverage": {"btcusdt": 0.9, "xauusd": 0.6},
+              "period_kinds": {"btcusdt": {"day": "utc_day", "session": "utc_session8"},
+                               "xauusd": {"day": "xau_day", "session": "xau_session"}},
+              "weight_kind": {"btcusdt": "traded_base_qty", "xauusd": "quote_ticks (PROXY, not traded volume)"},
+              "primary_bin_bps": 2.0, "bin_sensitivity_bps": [1.0, 5.0]},
+  "fixed_params": {"stop_buffer_atr": 0.10, "min_stop_atr": 0.5, "atr_n": 14, "max_excursion_bars": 12,
+                   "retest_bars": 12, "retest_tol_atr": 0.25, "min_net_rr": 1.0, "max_hold_minutes": 240,
+                   "dir_ema": 50, "dir_slope_bars": 3, "execution_tf": "1m"},
+  "grid": {
+    "rejection": {"profile_period": ["day", "session"], "va_pct": [0.6, 0.7, 0.8], "target": ["poc", "opposite"], "signal_tf": ["5m", "15m"]},
+    "breakout": {"profile_period": ["day", "session"], "va_pct": [0.6, 0.7, 0.8], "reward_to_risk": [1.5, 2.5], "signal_tf": ["5m", "15m"]}
+  },
+  "variants": {"A": ["rejection", false], "A_4H": ["rejection", true], "B": ["breakout", false], "B_4H": ["breakout", true]},
+  "trials_per_market": 96,
+  "datasets": {
+    "btc_dev": {"market": "btcusdt", "role": "development (chronological walk-forward); period previously examined by other BTC strategies, never by Volume Profile",
+                "bars": "data/raw/binance_btcusdt_1m_2023-01_2026-11.csv", "bins": "data/processed/vp/btc_2024-06_2026-05",
+                "warm": "2024-05-01T00:00Z", "start": "2024-06-03T00:00Z", "end": "2026-05-24T20:00Z"},
+    "xau_dev": {"market": "xauusd", "role": "development (chronological walk-forward); 2019-2020 prices were examined by the rejected scalping test (PR #19), never by Volume Profile",
+                "bars": "data/raw/mt5_xauusd_1m_ticks_2019_2020.csv", "bins": "data/processed/vp/xau_2019_2020",
+                "warm": "2019-01-01T00:00Z", "start": "2019-02-01T00:00Z", "end": "2021-01-01T00:00Z"},
+    "xau_val": {"market": "xauusd", "role": "chronological validation of frozen dev selections (single run); prices previously examined by other XAU strategies, never by Volume Profile - NOT unseen data",
+                "bars": "data/raw/mt5_xauusd_1m_ticks_2025_2026.csv", "bins": "data/processed/vp/xau_2025_2026",
+                "warm": "2025-05-27T00:00Z", "start": "2025-07-01T00:00Z", "end": "2026-11-07T00:00Z"},
+    "btc_final": {"market": "btcusdt", "role": "genuinely unexamined BTC/USDT history (2017-08 .. 2018-12, never used in this project); frozen parameters pre-registered before download",
+                  "bars": "data/raw/binance_btcusdt_1m_2017-08_2018-12.csv", "bins": "data/processed/vp/btc_2017-08_2018-12",
+                  "warm": "2017-08-17T00:00Z", "start": "2017-09-01T00:00Z", "end": "2019-01-01T00:00Z"}
+  },
+  "walk_forward": {"train_months": 6, "test_months": 2, "selection_objective": "net return %", "min_train_trades": 10},
+  "benchmarks": ["20 matched random-entry seeds (same signal frame, count, side share, stop distance in ATR, reward-to-risk distribution)",
+                 "time-at-price (TPO) profile levels with identical rules (no volume information)",
+                 "prior-period high/low range levels with identical rules (no profile)"],
+  "costs": {"btcusdt": {"base": "0.10% taker fee per side, spread 0.01, slippage 2 USDT", "stress": "0.10% fee, spread 1 bp, slippage 10 USDT", "low_fee": "0.075% fee"},
+            "xauusd": {"base": "commission 0, slippage 0.10, dataset historical spread p50 by New York hour", "stress": "commission 7/lot, slippage 0.30, p50 spread", "stress_p90": "commission 7/lot, slippage 0.30, p90 spread"}},
+  "multiple_testing": "walk-forward selection inside training windows only; deflated Sharpe ratio (Bailey & Lopez de Prado) of the best full-grid configuration against all 96 trials per market; every grid result reported",
+  "decision_rules": {
+    "dev_candidate": ["walk-forward OOS mean R > 0 with bootstrap 95% CI lower bound > 0",
+                      "OOS net return > 0 under the market's stress costs",
+                      "OOS mean R beats >= 18 of 20 matched random seeds",
+                      ">= 60% of OOS windows with positive net return",
+                      "deflated Sharpe ratio of the variant's best full-grid configuration >= 0.95"],
+    "volume_adds_information": "volume-level OOS mean R minus TPO-level and minus range-level OOS mean R both with bootstrap CI lower bound > 0",
+    "xau_validation": "frozen most-selected parameters: mean R > 0 with CI lower bound > 0 and net > 0 under stress costs",
+    "btc_final": "pre-registered separately before download (research/forward_test/vp_btc_2017_2018_preregistration.json)",
+    "shadow_test": "only a variant passing every applicable rule may be proposed for a separately pre-registered prospective shadow test"
+  }
+}
