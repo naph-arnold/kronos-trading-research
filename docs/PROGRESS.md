@@ -531,6 +531,48 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Volume Profile value-area research, vp-v1 (2026-11-08)
+
+Branch `research/volume-profile` (stacked on `research/xau-scalp4h-oos`, PR #19). Research only; no orders (live,
+demo or testnet); no credentials; MT5 not restarted and not reconfigured; both shadow runners never touched and
+gated (100% heartbeats, 0 alerts, consistent pre-registrations) before every downloaded month and stage.
+Details: `docs/volume-profile-feasibility.md`, `docs/volume-profile-research.md`.
+
+- **Feasibility first** (commit 4c95de4, before any strategy result):
+  - MetaQuotes-Demo XAUUSD has no traded volume (real_volume 0, no trade ticks), so the gold profile is a labelled
+    quote-tick proxy;
+  - BTC/USDT uses Binance official aggTrades, i.e. measured traded volume;
+  - the frozen protocol is `research/configs/vp_v1_protocol.json`.
+- **Engine and strategies:**
+  - `trading/vp/profile.py`: deterministic POC/VAH/VAL with explicit tie rules, completed 15-minute buckets
+    only, DSR-ready level tables;
+  - `trading/vp/strategies.py`: rejection and breakout-retest, optional 4H;
+  - `research/vp_data.py`, `research/vp_research.py`.
+- **Data:**
+  - **BTC 2024-06..2026-05:** 945,257,084 aggTrades, checksums OK, 0 id gaps, 100% per-minute volume/OHLC
+    match with official klines on all 1,051,200 minutes. The 3,000 exact re-sent rows in Binance's 2026-02
+    archive are dropped and counted.
+  - **BTC 2017-08..2018-12:** 82.5 M aggTrades, kline match 99.993%. Binance's kline archive is mis-stamped
+    (2017-12-04..18, 2018-02-09..10), so bars were built from the verified trades. This deviation is disclosed.
+  - **XAU:** 2019-20 and 2025-26 tick data validated against broker bars.
+- **Download incident:**
+  - **What:** the first BTC download was stopped by the host for low memory, with nothing saved (verified). It
+    was rewritten as a streaming, per-month-shard, resumable downloader with checksum, disk, memory-pause,
+    low-priority and runner-health gates.
+  - **Usage afterwards:** peak 0.99 GB and a minimum of 1.87 GB system free, with 0 pauses.
+- **Results:** no variant passed on either market.
+
+  | Data set | Mean R | Notes |
+  | --- | --- | --- |
+  | XAU dev | −0.19 to −0.39 R | 0/96 settings profitable |
+  | XAU 2025-26 frozen | −0.03 to −0.10 R | |
+  | BTC dev | −0.17 to −0.34 R | gross ≈ 0; costs ≈ 0.27 R; deflated Sharpe ≤ 0.17 |
+  | BTC 2017-18 pre-registered (`research/forward_test/vp_btc_2017_2018_preregistration.json`, 3ee4a21) | −0.11 to −0.18 R | gross ≤ +0.14 R |
+
+  Volume levels never beat time-at-price or prior-range levels (all CIs include 0).
+- **Decision:** not supported; gold Volume Profile closed; **no shadow test proposed**.
+- **Tests:** `tests/test_vp_profile.py` (18), `tests/test_vp_strategies.py` (10), `tests/test_vp_data.py` (6).
+
 ## Milestone: XAUUSD 4H-led scalping on unexamined 2019-2020 history (2026-11-08)
 
 Branch `research/xau-scalp4h-oos` (stacked on `research/mtf-scalp4h`, PR #18 unchanged). Research only; no orders;

@@ -29,7 +29,7 @@ def _get(url: str) -> bytes:
         return response.read()
 
 
-def month_rows(symbol: str, interval: str, month: str, fetch=_get) -> tuple[list[dict], dict]:
+def month_rows(symbol: str, interval: str, month: str, fetch=_get, *, drop_misaligned: bool = False) -> tuple[list[dict], dict]:
     name = f"{symbol}-{interval}-{month}.zip"
     url = f"{BASE}/{symbol}/{interval}/{name}"
     blob = fetch(url)
@@ -37,7 +37,7 @@ def month_rows(symbol: str, interval: str, month: str, fetch=_get) -> tuple[list
     actual = hashlib.sha256(blob).hexdigest()
     if actual != published:
         raise ValueError(f"{name}: checksum mismatch")
-    rows = []
+    rows, dropped = [], []
     for line in zipfile.ZipFile(io.BytesIO(blob)).read(name.replace(".zip", ".csv")).decode().splitlines():
         parts = line.split(",")
         if not parts[0].isdigit():
@@ -45,17 +45,27 @@ def month_rows(symbol: str, interval: str, month: str, fetch=_get) -> tuple[list
         ts = int(parts[0])
         ts_ms = ts // 1000 if ts > 10**14 else ts  # microseconds (2025+) -> milliseconds
         if ts_ms % INTERVAL_MS[interval]:
+            # Binance's 2017-12-04..18 klines are stamped hh:mm:20.799 after an exchange outage. Optionally
+            # excluded (count and volume recorded) for cross-check use; otherwise fail closed.
+            if drop_misaligned:
+                dropped.append((ts_ms, float(parts[5])))
+                continue
             raise ValueError(f"{name}: misaligned timestamp {ts}")
         rows.append({"timestamps": datetime.fromtimestamp(ts_ms / 1000, timezone.utc).isoformat(), "open": parts[1],
                      "high": parts[2], "low": parts[3], "close": parts[4], "volume": parts[5], "amount": parts[7]})
-    return rows, {"file": name, "sha256": actual}
+    meta = {"file": name, "sha256": actual}
+    if dropped:
+        meta["dropped_misaligned"] = {"count": len(dropped), "volume": round(sum(v for _, v in dropped), 8),
+                                      "first_ms": dropped[0][0], "last_ms": dropped[-1][0]}
+    return rows, meta
 
 
-def download(symbol: str, interval: str, first: str, last: str, output: Path, fetch=_get) -> dict:
+def download(symbol: str, interval: str, first: str, last: str, output: Path, fetch=_get, *,
+             drop_misaligned: bool = False) -> dict:
     step = INTERVAL_MS[interval]
     rows, files, gaps = [], [], []
     for month in pd.period_range(first, last, freq="M").strftime("%Y-%m"):
-        part, meta = month_rows(symbol, interval, month, fetch)
+        part, meta = month_rows(symbol, interval, month, fetch, drop_misaligned=drop_misaligned)
         rows += part
         files.append(meta)
     rows.sort(key=lambda r: r["timestamps"])
@@ -85,8 +95,10 @@ def main() -> None:
     p.add_argument("--first", required=True)
     p.add_argument("--last", required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--drop-misaligned", action="store_true",
+                   help="exclude candles at non-aligned times (recorded in the manifest); for cross-checks only")
     a = p.parse_args()
-    print(download(a.symbol, a.interval, a.first, a.last, a.output))
+    print(download(a.symbol, a.interval, a.first, a.last, a.output, drop_misaligned=a.drop_misaligned))
 
 
 if __name__ == "__main__":

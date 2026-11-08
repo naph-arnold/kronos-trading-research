@@ -1,0 +1,150 @@
+{
+  "title": "BTC/USDT Volume Profile vp-v1: independent earlier-market-regime robustness test (2017-09 .. 2018-12)",
+  "label": "INDEPENDENT EARLIER-MARKET-REGIME ROBUSTNESS TEST - not chronological forward validation (the period predates the 2019-2026 research data)",
+  "written_at_utc": "2026-11-08",
+  "written_before_download": true,
+  "status": "Research only; no orders (live, demo or testnet). Results may NOT be used for parameter optimization.",
+  "frozen_from": {
+    "file": "research/output/vp/v1/btc_dev.json",
+    "sha256": "1aeff9559cbe2fd1f7ca8ff1e52f245d4d4a7c0bc01c5fcec622036544a1572c",
+    "rule": "per variant, the parameters most often selected in the BTC 2024-06..2026-05 walk-forward (protocol frozen_from_dev)"
+  },
+  "frozen_variants": {
+    "A": {
+      "strategy": "rejection",
+      "profile_period": "session",
+      "va_pct": 0.6,
+      "bin_bps": 2.0,
+      "signal_tf": "5m",
+      "htf_filter": false,
+      "level_source": "volume",
+      "target": "opposite",
+      "reward_to_risk": 2.0,
+      "max_excursion_bars": 12,
+      "retest_bars": 12,
+      "retest_tol_atr": 0.25,
+      "stop_buffer_atr": 0.1,
+      "min_stop_atr": 0.5,
+      "atr_n": 14,
+      "dir_ema": 50,
+      "dir_slope_bars": 3,
+      "min_net_rr": 1.0,
+      "max_hold_minutes": 240
+    },
+    "A_4H": {
+      "strategy": "rejection",
+      "profile_period": "day",
+      "va_pct": 0.7,
+      "bin_bps": 2.0,
+      "signal_tf": "15m",
+      "htf_filter": true,
+      "level_source": "volume",
+      "target": "opposite",
+      "reward_to_risk": 2.0,
+      "max_excursion_bars": 12,
+      "retest_bars": 12,
+      "retest_tol_atr": 0.25,
+      "stop_buffer_atr": 0.1,
+      "min_stop_atr": 0.5,
+      "atr_n": 14,
+      "dir_ema": 50,
+      "dir_slope_bars": 3,
+      "min_net_rr": 1.0,
+      "max_hold_minutes": 240
+    },
+    "B": {
+      "strategy": "breakout",
+      "profile_period": "session",
+      "va_pct": 0.7,
+      "bin_bps": 2.0,
+      "signal_tf": "15m",
+      "htf_filter": false,
+      "level_source": "volume",
+      "target": "poc",
+      "reward_to_risk": 1.5,
+      "max_excursion_bars": 12,
+      "retest_bars": 12,
+      "retest_tol_atr": 0.25,
+      "stop_buffer_atr": 0.1,
+      "min_stop_atr": 0.5,
+      "atr_n": 14,
+      "dir_ema": 50,
+      "dir_slope_bars": 3,
+      "min_net_rr": 1.0,
+      "max_hold_minutes": 240
+    },
+    "B_4H": {
+      "strategy": "breakout",
+      "profile_period": "day",
+      "va_pct": 0.7,
+      "bin_bps": 2.0,
+      "signal_tf": "15m",
+      "htf_filter": true,
+      "level_source": "volume",
+      "target": "poc",
+      "reward_to_risk": 2.5,
+      "max_excursion_bars": 12,
+      "retest_bars": 12,
+      "retest_tol_atr": 0.25,
+      "stop_buffer_atr": 0.1,
+      "min_stop_atr": 0.5,
+      "atr_n": 14,
+      "dir_ema": 50,
+      "dir_slope_bars": 3,
+      "min_net_rr": 1.0,
+      "max_hold_minutes": 240
+    }
+  },
+  "dev_outcome_context": "No variant met the development rules (none was a dev candidate). Pre-declared consequence: whatever this test shows, no BTC Volume Profile variant is proposed for a shadow test from this research; a pass would only motivate a NEW, separately pre-registered prospective test on future data.",
+  "data": {
+    "source": "data.binance.vision monthly aggTrades and 1m klines, BTCUSDT spot (public, no credentials)",
+    "months": [
+      "2017-08",
+      "2018-12"
+    ],
+    "evaluation_span_utc": [
+      "2017-09-01T00:00Z",
+      "2019-01-01T00:00Z"
+    ],
+    "warm_up_from": "2017-08-17T00:00Z",
+    "base_bin_usd": 0.5,
+    "note": "Binance BTCUSDT trading began 2017-08-17; no data from this period has been used anywhere in this project."
+  },
+  "data_quality_rules": [
+    "every archive matches Binance's published SHA-256 .CHECKSUM",
+    "aggregate ids and underlying trade-id ranges contiguous; exact re-sent rows dropped (first copy kept) and counted; any true id gap reported",
+    "timestamps non-decreasing; no invalid price/quantity rows",
+    "per-minute aggTrades volume equals official 1m kline volume (tolerance 1e-6 relative) on >= 99.9% of minutes, OHLC compared",
+    "no-trade gaps > 5 minutes listed as possible exchange outages; never filled",
+    "profile periods below 90% 15-minute-bucket coverage are dropped (protocol)",
+    "if a rule fails, the test is reported as data-invalid for the affected span rather than repaired with invented data"
+  ],
+  "methodology": {
+    "protocol": "research/configs/vp_v1_protocol.json (unchanged)",
+    "engine": "research.vp_research frozen --dataset btc_final --prereg <this file>",
+    "single_run": true,
+    "risk": {
+      "max_intended_risk_per_trade": 0.005,
+      "daily_loss_halt": 0.015,
+      "aggregate_open_risk": 0.01,
+      "long_only_spot": true
+    },
+    "costs": "base 0.10% taker fee/side + 0.01 spread + 2 USDT slippage; stress 1 bp spread + 10 USDT slippage; low_fee 0.075%",
+    "instrument_filters": "current Binance exchangeInfo snapshot (2017 filters differed; documented limitation)",
+    "benchmarks": [
+      "20 matched random-entry seeds",
+      "TPO time-at-price levels",
+      "prior-period high/low levels"
+    ]
+  },
+  "success_criteria_per_variant": [
+    "mean R > 0 with bootstrap 95% CI lower bound > 0",
+    "net return > 0 under stress costs",
+    "mean R beats >= 18 of 20 matched random seeds"
+  ],
+  "forbidden": [
+    "changing parameters, grid, costs or rules after seeing any 2017-2018 data",
+    "re-running with different settings",
+    "using this period for selection"
+  ]
+}
