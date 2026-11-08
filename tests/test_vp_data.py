@@ -71,3 +71,26 @@ def test_exact_resent_aggtrade_rows_are_dropped_once_and_counted():
     (b, k, w), mins = process_aggtrades_csv(io.BytesIO(b"\n".join(rows) + b"\n"), 1.0, st, chunksize=2)
     assert st["duplicate_rows_dropped"] == 2 and st["agg_id_gaps"] == 0 and st["ts_decreasing"] == 0
     assert w.sum() == 15.0 and st["rows"] == 4
+
+
+def test_misaligned_klines_fail_closed_unless_explicitly_excluded_and_recorded():
+    import hashlib
+    import io as _io
+    import zipfile
+
+    import pytest
+
+    from research.binance_bulk import month_rows
+    good = "1512367200000,1,1,1,1,2.0,1512367259999,2,3,0,0,0"
+    bad = "1512367220799,1,1,1,1,0.5,1512367280798,0.5,1,0,0,0"
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("BTCUSDT-1m-2017-12.csv", good + "\n" + bad + "\n")
+    blob = buf.getvalue()
+
+    def fetch(url):
+        return (hashlib.sha256(blob).hexdigest() + "  x").encode() if url.endswith(".CHECKSUM") else blob
+    with pytest.raises(ValueError):
+        month_rows("BTCUSDT", "1m", "2017-12", fetch)
+    rows, meta = month_rows("BTCUSDT", "1m", "2017-12", fetch, drop_misaligned=True)
+    assert len(rows) == 1 and meta["dropped_misaligned"]["count"] == 1 and meta["dropped_misaligned"]["volume"] == 0.5

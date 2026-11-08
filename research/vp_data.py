@@ -410,6 +410,27 @@ def cmd_btc_validate(a) -> dict:
     return res
 
 
+def cmd_btc_bars(a) -> dict:
+    """1-minute OHLCV bars built from the verified aggregate trades (clock-aligned; minutes without trades are
+    absent, never filled). Used where Binance's kline archive is mis-stamped (2017-12-04..18, 2018-02-09..10)."""
+    prefix = Path(a.bins)
+    man = json.loads(prefix.with_suffix(".json").read_text())
+    mpath = prefix.with_name(man["minutes_file"])
+    if _sha_file(mpath) != man["minutes_sha256"]:
+        raise ValueError("minutes checksum mismatch")
+    d = np.load(mpath)
+    t = pd.to_datetime(d["minute"] * 60_000, unit="ms", utc=True)
+    out = Path(a.output)
+    df = pd.DataFrame({"timestamps": [x.isoformat() for x in t], "open": d["first"], "high": d["high"], "low": d["low"],
+                       "close": d["last"], "volume": d["volume"]})
+    df.to_csv(out, index=False, lineterminator="\n", float_format="%.8f")
+    bm = {"schema_version": 1, "source": f"built from verified Binance aggTrades ({prefix.name}, sha256 {man['sha256']})",
+          "construction": "per clock minute: first/max/min/last trade price, sum of base quantity; no-trade minutes absent",
+          "rows": int(len(df)), "sha256": _sha_file(out), "start": str(t[0]), "end": str(t[-1])}
+    out.with_suffix(out.suffix + ".json").write_text(json.dumps(bm, indent=2), encoding="utf-8")
+    return bm
+
+
 # ------------------------------------------------------------------------------------------ MT5 XAUUSD
 
 def utc_ticks(conn, name: str, start: datetime, end: datetime):
@@ -518,6 +539,9 @@ def main() -> None:
     v = sub.add_parser("btc-validate")
     v.add_argument("--bins", required=True)
     v.add_argument("--klines", required=True)
+    bb = sub.add_parser("btc-bars")
+    bb.add_argument("--bins", required=True)
+    bb.add_argument("--output", required=True)
     x = sub.add_parser("xau")
     x.add_argument("--start", required=True)
     x.add_argument("--end", required=True)
@@ -525,7 +549,7 @@ def main() -> None:
     x.add_argument("--output", required=True)
     x.add_argument("--bars-output")
     a = p.parse_args()
-    print(json.dumps({"btc": cmd_btc, "btc-validate": cmd_btc_validate, "xau": cmd_xau}[a.cmd](a), indent=2, default=str))
+    print(json.dumps({"btc": cmd_btc, "btc-validate": cmd_btc_validate, "btc-bars": cmd_btc_bars, "xau": cmd_xau}[a.cmd](a), indent=2, default=str))
 
 
 if __name__ == "__main__":
