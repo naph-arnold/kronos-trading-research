@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -246,7 +247,45 @@ class Mt5Feed:
         self.conn.shutdown()
 
 
-# --------------------------------------------------------------------------- runner
+# --------------------------------------------------------------------------- runner health / heartbeats
+
+@dataclass
+class ConnectionHealth:
+    """Runner and MT5 connection state, updated by the main loop and read by the heartbeat thread."""
+
+    runner_state: str = "starting"  # starting | waiting_for_mt5 | running | stopped
+    mt5_connected: bool | None = None
+    last_loop_at: datetime | None = None
+    last_successful_poll_at: datetime | None = None
+    last_broker_connected_at: datetime | None = None
+    connection_failures: int = 0
+    consecutive_failures: int = 0
+    reconnect_attempts: int = 0
+    successful_reconnects: int = 0
+    last_error: str | None = None
+
+
+class HeartbeatThread(threading.Thread):
+    """Writes one heartbeat per interval regardless of whether MT5 polling succeeds. Reads state only; never
+    calls MT5 (the MetaTrader5 module is not thread-safe)."""
+
+    def __init__(self, runner: "Runner", interval: float):
+        super().__init__(name="phase2d-heartbeat", daemon=True)
+        self.runner, self.interval, self._stop_event = runner, interval, threading.Event()
+
+    def run(self) -> None:
+        while True:
+            try:
+                self.runner.heartbeat(force=True)
+            except Exception as exc:  # noqa: BLE001 - never let monitoring kill the runner
+                log.warning("heartbeat failed: %s", exc)
+            if self._stop_event.wait(self.interval):
+                break
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self.join(timeout=10)
+
 
 @dataclass
 class Runner:
@@ -259,9 +298,11 @@ class Runner:
     server_tz: ServerTimeZone | None = None
     engine: ShadowEngine | None = None
     _last: dict = field(default_factory=dict)
+    health: ConnectionHealth = field(default_factory=ConnectionHealth)
 
     def __post_init__(self):
         from research.phase2_xauusd import server_tz_from_args
+        self._beat_lock = threading.Lock()
         self.state_dir = Path(self.state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.server_tz = self.server_tz or server_tz_from_args(self.config["server_tz"])
@@ -395,6 +436,91 @@ class Runner:
         self._last["sessions"] = now
         return result
 
+    # -- heartbeats ------------------------------------------------------------------------------
+    def heartbeat_payload(self, now: datetime) -> dict:
+        """Status at `now`, from recorded state only. Market data is reported fresh only when MT5 is connected,
+        the market is open and the last processed tick is recent; entries are reported blocked otherwise."""
+        h, engine = self.health, self.engine
+        stale_after = timedelta(seconds=self.config["health"]["max_quote_gap_s"])
+        loop_age = None if h.last_loop_at is None else (now - h.last_loop_at).total_seconds()
+        status = h.runner_state
+        if status == "running" and loop_age is not None and loop_age > max(180, 6 * self.runner_cfg["poll_seconds"]):
+            status = "stalled"
+        last_tick = engine.last_tick.time if engine is not None and engine.last_tick is not None else None
+        market_open, closed_reason = None, None
+        if engine is not None:
+            try:
+                market_open = engine.calendar.is_open(now)
+                closed_reason = engine.calendar.tradeable_reason(now)
+            except Exception as exc:  # noqa: BLE001
+                closed_reason = f"calendar error: {type(exc).__name__}"
+        if h.mt5_connected is not True:
+            freshness = "unavailable (MT5 not connected)"
+        elif market_open is False:
+            freshness = "market closed"
+        elif last_tick is None or now - last_tick > stale_after:
+            freshness = "stale"
+        else:
+            freshness = "fresh"
+        blocked = []
+        if h.mt5_connected is not True:
+            blocked.append("MT5 not connected")
+        if freshness == "stale":
+            blocked.append("market data stale")
+        if engine is None:
+            blocked.append("engine not started")
+        else:
+            if closed_reason:
+                blocked.append(closed_reason)
+            if engine.calendar.verification != "broker_verified":
+                blocked.append("session calendar not broker-verified")
+            try:
+                guard = engine._guard()(now)
+            except Exception as exc:  # noqa: BLE001 - concurrent update; report, never crash
+                guard = f"guard unavailable: {type(exc).__name__}"
+            if guard:
+                blocked.append(guard)
+        blocked += [f"breaker: {r}" for r in self.breaker.reasons()]
+
+        def iso(x):
+            return None if x is None else x.isoformat()
+        return {"runner_status": status, "loop_age_s": loop_age,
+                "mt5_connection": {True: "connected", False: "disconnected", None: "unknown"}[h.mt5_connected],
+                "market_open": market_open, "market_data": freshness, "last_market_data_at": iso(last_tick),
+                "last_bar_close": iso(engine.last_bar_close if engine is not None else None),
+                "last_successful_poll_at": iso(h.last_successful_poll_at),
+                "last_broker_connected_at": iso(h.last_broker_connected_at),
+                "connection_failures": h.connection_failures, "consecutive_failures": h.consecutive_failures,
+                "reconnect_attempts": h.reconnect_attempts, "successful_reconnects": h.successful_reconnects,
+                "last_error": h.last_error, "new_entries": "blocked" if blocked else "allowed",
+                "entry_block_reasons": blocked[:6],
+                "calendar": engine.calendar.verification if engine is not None else None,
+                "open_positions": len(engine.positions) if engine is not None else 0}
+
+    def heartbeat(self, *, force: bool = False) -> bool:
+        """Write a heartbeat if one is due (or `force`). Safe to call from the heartbeat thread."""
+        with self._beat_lock:
+            now = self.clock()
+            last = self._last.get("heartbeat")
+            if not force and last is not None and now - last < timedelta(seconds=self.runner_cfg["heartbeat_seconds"]):
+                return False
+            self.store.heartbeat(now, **self.heartbeat_payload(now))
+            self._last["heartbeat"] = now
+            return True
+
+    def _poll_succeeded(self, now: datetime) -> None:
+        h = self.health
+        h.mt5_connected, h.runner_state = True, "running"
+        h.last_successful_poll_at = h.last_broker_connected_at = now
+        h.consecutive_failures = 0
+
+    def _poll_failed(self, now: datetime, exc: Exception) -> None:
+        h = self.health
+        h.mt5_connected = False
+        h.connection_failures += 1
+        h.consecutive_failures += 1
+        h.last_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+
     # -- polling ---------------------------------------------------------------------------------
     def poll(self) -> dict:
         now = self.clock()
@@ -431,11 +557,7 @@ class Runner:
     def housekeeping(self) -> None:
         now = self.clock()
         cfg = self.runner_cfg
-        if now - self._last.get("heartbeat", datetime.min.replace(tzinfo=timezone.utc)) >= \
-                timedelta(seconds=cfg["heartbeat_seconds"]):
-            self.store.heartbeat(now, last_bar_close=str(self.engine.last_bar_close),
-                                 breaker=self.breaker.reasons(), calendar=self.engine.calendar.verification)
-            self._last["heartbeat"] = now
+        self.heartbeat()
         if now - self._last.get("calendar", now) >= timedelta(hours=self.config["calendar"]["refresh_hours"]):
             self._calendar_service(now)
         if now - self._last.get("spec", now) >= timedelta(hours=cfg["spec_refresh_hours"]):
@@ -461,33 +583,70 @@ class Runner:
 
     def run(self, *, once: bool = False, max_minutes: float | None = None,
             sleep: Callable[[float], None] = time.sleep) -> dict:
+        from trading.connectors.mt5 import Mt5Unavailable
         started = self.clock()
-        result = self.start()
-        failures = 0
-        while True:
-            if (self.state_dir / "STOP").exists():
-                self.store.event(self.clock(), "stop_file")
-                break
-            try:
-                result = self.poll()
-                self.housekeeping()
-                failures = 0
-            except Exception as exc:  # data interruption: record, back off, reconnect
-                failures += 1
-                self.store.event(self.clock(), "data_interruption", error=f"{type(exc).__name__}: {exc}",
-                                 consecutive=failures)
-                log.warning("poll failed: %s", exc)
-                sleep(min(60, 5 * failures))
+        beats = HeartbeatThread(self, self.runner_cfg["heartbeat_seconds"])
+        beats.start()  # heartbeats continue through start-up retries, broker outages and closed markets
+        result: dict = {}
+        try:
+            while True:  # start-up retries only while MT5 is unavailable; other errors are fatal
+                if (self.state_dir / "STOP").exists():
+                    self.store.event(self.clock(), "stop_file")
+                    return {"last_poll": result, "status": None}
                 try:
-                    self.feed.reconnect()
-                    self.store.event(self.clock(), "reconnect")
-                except Exception as reconnect_exc:
-                    self.store.event(self.clock(), "mt5_error", error=f"{type(reconnect_exc).__name__}")
-            if once or (max_minutes is not None and self.clock() - started >= timedelta(minutes=max_minutes)):
-                break
-            sleep(self.runner_cfg["poll_seconds"])
-        self.feed.shutdown()
-        return {"last_poll": result, "status": self.engine.status()}
+                    result = self.start()
+                    self._poll_succeeded(self.clock())
+                    break
+                except Mt5Unavailable as exc:
+                    self._poll_failed(self.clock(), exc)
+                    self.health.runner_state = "waiting_for_mt5"
+                    self.store.event(self.clock(), "start_failed", error=self.health.last_error,
+                                     consecutive=self.health.consecutive_failures)
+                    try:
+                        self.feed.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    sleep(min(60, 5 * self.health.consecutive_failures))
+            while True:
+                self.health.last_loop_at = self.clock()
+                if (self.state_dir / "STOP").exists():
+                    self.store.event(self.clock(), "stop_file")
+                    break
+                try:
+                    result = self.poll()
+                    self._poll_succeeded(self.clock())
+                    self.housekeeping()
+                except Exception as exc:  # data interruption: record, back off, reconnect
+                    self._poll_failed(self.clock(), exc)
+                    self.store.event(self.clock(), "data_interruption", error=self.health.last_error,
+                                     consecutive=self.health.consecutive_failures)
+                    log.warning("poll failed: %s", exc)
+                    sleep(min(30, 5 * self.health.consecutive_failures))
+                    self.health.reconnect_attempts += 1
+                    try:
+                        self.feed.reconnect()
+                        self.health.successful_reconnects += 1
+                        self.health.mt5_connected = True
+                        self.health.last_broker_connected_at = self.clock()
+                        self.store.event(self.clock(), "reconnect")
+                    except Exception as reconnect_exc:
+                        self.health.mt5_connected = False
+                        self.store.event(self.clock(), "mt5_error", error=f"{type(reconnect_exc).__name__}")
+                if once or (max_minutes is not None and self.clock() - started >= timedelta(minutes=max_minutes)):
+                    break
+                sleep(self.runner_cfg["poll_seconds"])
+        finally:
+            self.health.runner_state = "stopped"
+            beats.stop()
+            try:
+                self.heartbeat(force=True)  # final heartbeat records the stop
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.feed.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+        return {"last_poll": result, "status": self.engine.status() if self.engine else None}
 
 
 # --------------------------------------------------------------------------- CLI

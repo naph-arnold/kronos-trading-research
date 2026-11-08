@@ -118,6 +118,24 @@ For unattended operation, `research/forward_test/run_shadow.ps1` restarts the ru
 done by the operator. The terminal must stay logged in to the demo account, and the PC must not sleep during
 market hours. Downtime is visible in the report: heartbeat gaps, and entries rejected as "system not live".
 
+### Heartbeats and connection health (fix 2026-11-08)
+A dedicated heartbeat thread writes one heartbeat per minute regardless of MT5 polling (it reads state only and
+never calls MT5). The runner also keeps retrying start-up while MT5 is unavailable. Each heartbeat records:
+- `runner_status`: starting, waiting_for_mt5, running, stalled or stopped.
+- `mt5_connection`: connected, disconnected or unknown.
+- `market_open`.
+- `market_data`: fresh, stale, market closed, or unavailable (MT5 not connected). It is never reported fresh
+  while disconnected.
+- `last_market_data_at`, `last_successful_poll_at` and `last_broker_connected_at`.
+- `connection_failures`, `consecutive_failures`, `reconnect_attempts` and `successful_reconnects`.
+- `new_entries` (allowed or blocked) with the blocking reasons.
+
+While data is stale or unavailable no tick is processed, so no simulated entry can occur. After reconnection the
+catch-up manages open simulated positions and rejects missed entries ("system not live"). The report separates
+runner uptime from `data_availability`. The supervisor also requests `ES_DISPLAY_REQUIRED`, because on this
+Modern Standby laptop `ES_SYSTEM_REQUIRED` alone did not prevent idle standby (System log, 2026-11-08 05:09 UTC).
+The display therefore stays on while the supervisor runs.
+
 ## Known limitations
 - The simulation has no queue position, partial fills or requotes. MT5 demo ticks are broker quotes, not exchange
   prints.

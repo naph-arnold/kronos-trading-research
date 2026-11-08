@@ -11,14 +11,15 @@ New-Item -ItemType Directory -Force $state | Out-Null
 $log = Join-Path $state "runner.log"
 $python = Join-Path $Repo ".venv311\Scripts\python.exe"
 
-# Keep the PC from idle-sleeping while this supervisor runs (ES_CONTINUOUS | ES_SYSTEM_REQUIRED). Scoped to this
-# process: Windows drops the request automatically when it exits; no power-plan setting is changed. Does not
-# prevent lid-close or manual sleep. The display may still turn off.
+# Keep the PC awake while this supervisor runs (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED). On Modern
+# Standby laptops the system enters standby when the display idles off, so ES_SYSTEM_REQUIRED alone is not enough
+# (observed 2026-11-08: "entering Modern Standby, Reason: Idle Timeout"). Scoped to this process: Windows drops the
+# request automatically when it exits; no power-plan setting is changed. Lid-close or manual sleep still sleep.
 Add-Type -Namespace Kronos -Name Power -MemberDefinition @"
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 public static extern uint SetThreadExecutionState(uint esFlags);
 "@
-$previous = [Kronos.Power]::SetThreadExecutionState([uint32]"0x80000001")
+$previous = [Kronos.Power]::SetThreadExecutionState([uint32]"0x80000003")
 Add-Content $log "$(Get-Date -Format o) keep-awake requested (previous state 0x$('{0:X}' -f $previous))"
 
 while (-not (Test-Path (Join-Path $state "STOP"))) {

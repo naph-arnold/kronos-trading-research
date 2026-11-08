@@ -1,6 +1,6 @@
 # Kronos Trading Bot — Verified Progress
 
-Updated: 2026-11-07
+Updated: 2026-11-08
 
 ## Approved decisions
 - XAUUSD via MetaTrader 5 demo and BTC/USDT via Binance Spot Testnet.
@@ -462,6 +462,68 @@ Operator keeps the runner (`$env:EXECUTION_MODE="demo"; .venv311\Scripts\python 
 `research/forward_test/run_shadow.ps1`) before the Sunday 2026-11-08 23:00 UTC reopen and keeps the terminal
 logged in. Weekly `report`; interim checkpoint at 50 candidate trades; final evaluation at ≥ 100 trades and
 ≥ 2027-05-09. No parameter changes; no execution adapters until explicitly authorized.
+
+---
+
+## Milestone: Architecture alignment (ADR-001) and XAUUSD heartbeat reliability (2026-11-08)
+
+Branch `fix/xau-shadow-heartbeat` (from PR #12's head `9d43b26`). PR #13 (ADR-001, draft) and PR #14 (Phase 2E)
+reviewed and left unmerged.
+
+### ADR-001 (PR #13) compliance review
+| Decision | Status in code |
+| --- | --- |
+| Python is the central engine (strategies, risk, calendar, Kronos, audit, monitoring) | Compliant |
+| Python MT5 connector preserved; read-only allowlist proxy (`order_send`, `order_check`, `Buy`, `Sell`, `Close` blocked) | Compliant |
+| Binance shadow pipeline preserved (PR #14), public read-only data, simulated fills | Compliant (running, unmodified) |
+| Independent pipelines (process, state, breaker, daily ledger, calendar store, KILL/STOP) | Compliant |
+| No MQL5 EA; MQL5 only after a measured Python-vs-MQL5 comparison and Phase 3 approval | Compliant (none written) |
+| Kronos as forecaster; six agents on the official xAI Grok API; no AI bypass of the risk engine | Compliant (agents inactive) |
+ADR-001's note that the crypto shadow pipeline is "not confirmed complete" predates PR #14, which now implements
+and runs it.
+
+### Heartbeat fix
+- Cause: heartbeats were written only in `housekeeping()` after a successful poll, and a disconnected MT5 at start-up
+  made the process exit with no heartbeat at all.
+- `research/phase2d_shadow.py`: `HeartbeatThread` writes every minute regardless of polling (reads state only; never
+  calls MT5); `ConnectionHealth` counters; start-up retries while MT5 is unavailable; failure/reconnect tracking.
+  Engine, strategies, parameters and risk limits unchanged.
+- `trading/shadow/report.py`: `uptime.data_availability` separates data availability from runner uptime.
+- `research/forward_test/run_shadow.ps1`: adds `ES_DISPLAY_REQUIRED`. The System log showed "entering Modern Standby,
+  Reason: Idle Timeout" at 05:09:26 UTC despite `ES_SYSTEM_REQUIRED`.
+- Tests: 4 new (disconnection never reported as fresh data; closed market and stale data; heartbeats continue while
+  every poll fails, with failure/reconnect counters; start-up retries with `waiting_for_mt5` heartbeats).
+  `pytest -q tests --ignore=tests/test_kronos_regression.py` → **419 passed, 8 integration deselected** (Python
+  3.11.18); ruff (CI list) clean.
+
+### Restart of the XAUUSD runner (only)
+1. Consistent SQLite backups with SHA-256 manifests and integrity checks:
+   - `state/backups/phase2d_shadow_20261108T050123Z`: online backup while running.
+   - `..._20261108T050608Z_stopped`: after stopping.
+   - Contents: 6,166 warm-up bars, 188 warm-up signals, 0 decisions/trades/positions, all 28 books at starting
+     equity, preregistration hash `6f743af6…` intact.
+2. Rehearsal: the new code ran once against a copy of the state with a KILL file. Restore was exact (0 signal
+   mismatches), reconciliation OK, KILL blocked entries, and the MT5 demo account was unchanged.
+3. STOP → runner and supervisor exited cleanly → relaunched.
+4. The first relaunch (05:06 UTC) was terminated externally about 6 s after start-up: both supervisor and runner
+   vanished with no exit line or crash entry. The same code ran normally in the foreground for 2 minutes, so the
+   cause is outside the runner code and is still unexplained.
+5. Relaunched at 05:15 UTC. The restore again showed 0 mismatches, and heartbeats arrived every 60 s.
+
+### Runner health (2026-11-08 ~05:23 UTC)
+- XAUUSD:
+  - Running, MT5 connected; market correctly closed until Sunday 23:00 UTC; entries blocked.
+  - Session calendar stays unverified until a fresh tick after the reopen.
+  - Demo account 3,000 USD with 0 positions and 0 orders, unchanged.
+- BTC/USDT (inspected read-only; not restarted):
+  - Running since 04:45 UTC; 37 heartbeats, all `ok`, largest gap 73 s during the 31-second standby.
+  - WebSocket connected (46k messages, 0 reconnects).
+  - Warm-up only (965 signals); 0 decisions/trades; breaker clear; config matches the preregistration.
+
+### Next step
+Watch the Sunday 23:00 UTC reopen: the XAUUSD session calendar should become broker-verified, and both runners
+should record live (non-warm-up) bars after 2026-11-09 00:00 UTC. Investigate the external process termination
+(consider a Windows scheduled task for supervision, which needs operator approval).
 
 ---
 
