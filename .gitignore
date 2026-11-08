@@ -82,3 +82,6 @@ research/output/
 .venv311/
 # Shadow forward-test runtime state (SQLite, breaker, kill file)
 state/
+
+# Local power-plan backup written by ops/windows/power_settings.ps1 -Apply
+ops/windows/power_settings_backup.json
