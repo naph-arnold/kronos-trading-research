@@ -188,7 +188,23 @@ def uptime(store: ShadowStore, *, poll_seconds: float, now: datetime) -> dict:
             "uptime_pct": round(100 * (1 - down / span), 3) if span > 0 else None,
             "downtime": [{"from": a.isoformat(), "to": b.isoformat(), "minutes": round((b - a).total_seconds() / 60, 1)}
                          for a, b in gaps],
-            "last_heartbeat_age_minutes": round((now - beats[-1]).total_seconds() / 60, 1)}
+            "last_heartbeat_age_minutes": round((now - beats[-1]).total_seconds() / 60, 1),
+            "data_availability": _data_availability([d for _, d in store.heartbeats()])}
+
+
+def _data_availability(details: list[dict]) -> dict | None:
+    """Runner uptime and market-data availability are separate: heartbeats continue during broker outages and
+    closed markets and record the connection and freshness state at each beat (heartbeats written before the
+    Phase 2D heartbeat fix carry no such fields and are not counted)."""
+    rows = [d for d in details if "mt5_connection" in d or "market_data" in d]
+    if not rows:
+        return None
+    open_rows = [d for d in rows if d.get("market_open")]
+    fresh = sum(1 for d in open_rows if d.get("market_data") == "fresh")
+    return {"heartbeats_with_status": len(rows),
+            "disconnected_heartbeats": sum(1 for d in rows if d.get("mt5_connection") == "disconnected"),
+            "market_open_heartbeats": len(open_rows),
+            "fresh_data_pct_while_open": round(100 * fresh / len(open_rows), 2) if open_rows else None}
 
 
 def build_report(store: ShadowStore, prereg: dict, *, now: datetime, poll_seconds: float) -> dict:

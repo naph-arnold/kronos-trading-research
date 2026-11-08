@@ -622,3 +622,140 @@ def test_runner_start_warmup_and_poll_end_to_end(tmp_path, monkeypatch, clock_ok
                    calendar_service=_calendar_service(tmp_path / "c2"))
     restored = again.start()["restored"]
     assert restored["signals_mismatch"] == 0 and restored["reconciliation"]["ok"] and not again.breaker.reasons()
+
+
+# --------------------------------------------------------------------------- heartbeat reliability (Phase 2D fix)
+
+class FlakyFeed(FakeFeed):
+    """SYNTHETIC feed whose MT5 terminal can be 'disconnected' (every read raises Mt5Unavailable)."""
+
+    def __init__(self, bars, *, fail_connects=0):
+        super().__init__(bars)
+        self.down, self.fail_connects, self.reconnects = False, fail_connects, 0
+
+    def _check(self):
+        from trading.connectors.mt5 import Mt5Unavailable
+        if self.down:
+            raise Mt5Unavailable("Terminal disconnected from broker server")
+
+    def connect(self):
+        from trading.connectors.mt5 import Mt5Unavailable
+        if self.fail_connects > 0:
+            self.fail_connects -= 1
+            raise Mt5Unavailable("Terminal is not connected to the broker server")
+        return super().connect()
+
+    def reconnect(self):
+        self.reconnects += 1
+        self._check()
+        return super().connect()
+
+    def symbol_info(self):
+        self._check()
+        return super().symbol_info()
+
+    def closed_bars(self, start, end):
+        self._check()
+        return super().closed_bars(start, end)
+
+    def ticks(self, start, end):
+        self._check()
+        return super().ticks(start, end)
+
+    def account_state(self):
+        self._check()
+        return super().account_state()
+
+
+def _hb_runner(tmp_path, monkeypatch, feed, now, heartbeat_seconds=60):
+    from research.phase2d_shadow import Runner, load_config
+    monkeypatch.setenv("EXECUTION_MODE", "demo")
+    config, prereg = load_config(ROOT / "research/configs/phase2d_shadow_xauusd.json")
+    config = json.loads(json.dumps(config))
+    config["runner"]["heartbeat_seconds"] = heartbeat_seconds
+    return Runner(config, prereg, feed, tmp_path / "state", clock=lambda: now[0],
+                  calendar_service=_calendar_service(tmp_path))
+
+
+def test_heartbeat_reports_disconnection_without_claiming_fresh_data(tmp_path, monkeypatch):
+    from trading.connectors.mt5 import Mt5Unavailable
+    now = [datetime(2026, 11, 10, 15, 7, 30, tzinfo=UTC)]
+    feed = FlakyFeed(_feed_bars(datetime(2026, 11, 11, tzinfo=UTC)))
+    runner = _hb_runner(tmp_path, monkeypatch, feed, now)
+    runner.start()
+    now[0] += timedelta(minutes=1)
+    runner.poll()
+    runner._poll_succeeded(now[0])
+    connected = runner.heartbeat_payload(now[0])
+    assert connected["mt5_connection"] == "connected" and connected["market_open"] is True
+    last_data = connected["last_market_data_at"]
+    feed.down = True
+    now[0] += timedelta(minutes=1)
+    with pytest.raises(Mt5Unavailable):
+        runner.poll()
+    runner._poll_failed(now[0], Mt5Unavailable("Terminal disconnected from broker server"))
+    down = runner.heartbeat_payload(now[0])
+    assert down["mt5_connection"] == "disconnected" and down["market_data"].startswith("unavailable")
+    assert down["new_entries"] == "blocked" and "MT5 not connected" in down["entry_block_reasons"]
+    assert down["last_market_data_at"] == last_data and down["connection_failures"] == 1
+    assert down["last_successful_poll_at"] == connected["last_successful_poll_at"]
+
+
+def test_heartbeat_marks_closed_market_and_stale_data(tmp_path, monkeypatch):
+    now = [datetime(2026, 11, 10, 15, 7, 30, tzinfo=UTC)]
+    runner = _hb_runner(tmp_path, monkeypatch, FlakyFeed(_feed_bars(datetime(2026, 11, 11, tzinfo=UTC))), now)
+    runner.start()
+    runner._poll_succeeded(now[0])
+    saturday = datetime(2026, 11, 14, 12, tzinfo=UTC)
+    closed = runner.heartbeat_payload(saturday)
+    assert closed["market_open"] is False and closed["market_data"] == "market closed"
+    assert closed["new_entries"] == "blocked"
+    stale = runner.heartbeat_payload(now[0] + timedelta(minutes=10))  # open, connected, no recent tick
+    assert stale["market_data"] == "stale" and "market data stale" in stale["entry_block_reasons"]
+
+
+def test_heartbeats_continue_while_every_poll_fails(tmp_path, monkeypatch):
+    import time as real_time
+    now = [datetime(2026, 11, 10, 15, 7, 30, tzinfo=UTC)]
+    feed = FlakyFeed(_feed_bars(datetime(2026, 11, 11, tzinfo=UTC)))
+    runner = _hb_runner(tmp_path, monkeypatch, feed, now, heartbeat_seconds=0.02)
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=max(seconds, 5))
+        feed.down = now[0] < datetime(2026, 11, 10, 15, 12, tzinfo=UTC) or now[0] > datetime(2026, 11, 10, 15, 9,
+                                                                                            tzinfo=UTC)
+        real_time.sleep(0.03)  # let the heartbeat thread run
+
+    original_start = runner.start
+
+    def start_then_disconnect():
+        result = original_start()
+        feed.down = True  # broker connection lost right after start-up
+        return result
+    runner.start = start_then_disconnect
+    runner.run(max_minutes=3, sleep=sleep)
+    beats = [b for _, b in runner.store.heartbeats()]
+    assert len(beats) >= 5
+    down = [b for b in beats if b["mt5_connection"] == "disconnected"]
+    assert down and all(b["market_data"].startswith("unavailable") and b["new_entries"] == "blocked" for b in down)
+    assert max(b["reconnect_attempts"] for b in beats) >= 1 and max(b["connection_failures"] for b in beats) >= 1
+    assert beats[-1]["runner_status"] == "stopped"
+    kinds = [e["kind"] for e in runner.store.events()]
+    assert "data_interruption" in kinds and runner.engine.reconcile()["ok"]
+
+
+def test_start_retries_while_mt5_unavailable_and_heartbeats_meanwhile(tmp_path, monkeypatch):
+    import time as real_time
+    now = [datetime(2026, 11, 10, 15, 7, 30, tzinfo=UTC)]
+    feed = FlakyFeed(_feed_bars(datetime(2026, 11, 11, tzinfo=UTC)), fail_connects=2)
+    runner = _hb_runner(tmp_path, monkeypatch, feed, now, heartbeat_seconds=0.02)
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=max(seconds, 1))
+        real_time.sleep(0.03)
+    runner.run(once=True, sleep=sleep)
+    events = [e["kind"] for e in runner.store.events()]
+    assert events.count("start_failed") == 2 and "start" in events
+    beats = [b for _, b in runner.store.heartbeats()]
+    assert any(b["runner_status"] == "waiting_for_mt5" and b["mt5_connection"] == "disconnected" for b in beats)
+    assert any(b["runner_status"] in ("running", "stopped") and b["calendar"] for b in beats)
