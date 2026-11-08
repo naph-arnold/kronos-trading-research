@@ -527,5 +527,60 @@ should record live (non-warm-up) bars after 2026-11-09 00:00 UTC. Investigate th
 
 ---
 
+## Milestone: Dual-runner reliability and monitoring (2026-11-08)
+
+Branch `ops/dual-runner-reliability` (from PR #15's head `2436d78`). Neither runner was restarted for this milestone.
+Details and evidence: `docs/operations-windows.md`.
+
+### Verified findings
+- **XAUUSD termination (05:06 UTC): cause undetermined.** It was an abrupt kill: no PowerShell engine-stop
+  record, no crash/WER entry, no runner exit line. The process-exit audit trail is disabled. The WMI-host
+  hypothesis is refuted (surviving supervisors outlived their WMI parents). The same code ran normally in the
+  foreground and after relaunch.
+- **Correction:** the 11-07/08 "broker disconnections" were mainly **Modern Standby**. XAUUSD reconnect/disconnect
+  times match Kernel-Power standby exit/entry to the second. The PC sleeps after 3 min idle on AC.
+  `ES_SYSTEM_REQUIRED` did not prevent it (05:09 UTC); `ES_DISPLAY_REQUIRED` (active in the XAUUSD supervisor) does,
+  but keeps the screen on.
+- **Runner health (05:35 UTC):**
+  - XAUUSD: running since 05:15, heartbeats every 60 s, MT5 connected, market correctly closed, entries blocked.
+  - BTC/USDT: running since 04:45, all heartbeats `ok`, WebSocket connected with quotes < 1 s old, 0 reconnects.
+  - Both: warm-up only; 0 decisions/trades/positions; all books at starting equity; breakers clear;
+    pre-registration hashes consistent (file = config = state).
+- **No orders possible:**
+  - MT5 proxy blocks `order_send`, `order_check`, `Buy`, `Sell`, `Close`, `login` and `market_book_add` (checked
+    against the installed package).
+  - Binance paths are market data plus a testnet-only signed account GET (no keys configured).
+  - Testnet `submit()` raises `ExecutionNotAuthorized`.
+  - No order APIs exist in either tree.
+- **Risk limits unchanged:** 0.5% / 1.5% / 1% in both configs; hard 0.5% ceiling in `trading/risk.py`.
+
+### Added (no system changes applied)
+- `ops/windows/kronos_supervisor.ps1`: single instance (mutex + running-runner scan), STOP checked before every
+  start, never touches STOP/KILL, configurable keep-awake. Verified live: refused to duplicate the running
+  XAUUSD runner; honoured STOP.
+- `ops/windows/scheduled_tasks.ps1`: log-on + 15-minute check tasks for both supervisors and a daily health task.
+  Dry run by default; `-Apply` requires approval.
+- `ops/windows/power_settings.ps1`: AC sleep → never (display still turns off), optional lid action. Dry run by
+  default; `-Apply`/`-Revert` with a saved backup. Requires approval.
+- `research/dual_health_report.py`: unified read-only report (SQLite `mode=ro`) covering uptime, disconnections,
+  data gaps, signals, decisions, trades, per-book performance, safety alerts and integrity. First run: XAUUSD 24-h
+  uptime 6.1% (legacy heartbeat gaps and standby), BTC/USDT running since 04:45; integrity consistent for both.
+- Tests: `tests/test_dual_health_report.py` (5: metrics, alerts per market, missing state, read-only, ops-script
+  safety).
+
+### Awaiting approval (persistent system changes)
+1. `ops/windows/power_settings.ps1 -Apply` (AC sleep never; optional `-LidDoNothing`). Then the supervisors can use
+   `-KeepAwake system`.
+2. `ops/windows/scheduled_tasks.ps1 -Apply` (supervision after log-on/reboot plus the daily health report).
+3. Optional, administrator: process-termination auditing, to identify any future external kill.
+
+### Forward-test readiness (2026-11-09 00:00 UTC)
+- Both pre-registrations are intact, and there are no non-warm-up signals before the boundary.
+- Both engines classify bars closing at or after 00:00 UTC as live.
+- The XAUUSD session calendar becomes broker-verified after the first fresh tick following the 23:00 UTC reopen;
+  the runner retries every 10 minutes.
+
+---
+
 ## Update policy
 Only mark items done when code, tests or verifiable operational evidence exists. For every milestone add date, branch/commit, command/test results, blockers, and next step. Do not treat plans or historical conversation claims as verified implementation.
