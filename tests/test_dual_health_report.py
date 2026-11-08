@@ -118,6 +118,8 @@ def test_supervisor_respects_stop_and_never_removes_stop_or_kill():
     loop = text[text.index("while ($true)"):]
     assert loop.index("Test-Path $stop") < loop.index("starting runner")  # STOP checked before every start
     assert "Mutex" in text and "-m $Module run" in text  # single instance + running-runner scan
+    assert loop.index("Wait-Adopted") < loop.index("starting runner")  # adopt, never duplicate
+    assert "AdoptGraceSeconds" in text and "STOP present while adopting" in text
     for api in ("order_send", "/api/v3/order", "orderSend", "OrderSend"):  # no order APIs anywhere
         assert all(api not in _ps(n) for n in ("kronos_supervisor.ps1", "scheduled_tasks.ps1", "power_settings.ps1"))
 

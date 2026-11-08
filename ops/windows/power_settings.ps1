@@ -32,6 +32,7 @@ if ($Revert) {
     powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP STANDBYIDLE $saved.STANDBYIDLE_ac_seconds
     if ($null -ne $saved.LIDACTION_ac) { powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION $saved.LIDACTION_ac }
     powercfg /setactive SCHEME_CURRENT
+    Remove-Item $backup  # originals restored; the next -Apply records fresh originals
     "Reverted to $($saved | ConvertTo-Json -Compress)"
     return
 }
@@ -43,7 +44,11 @@ if (-not $Apply) {
     "No changes made. Re-run with -Apply after approval (and -Revert to undo)."
     return
 }
-$current | ConvertTo-Json | Set-Content $backup
+if (Test-Path $backup) {
+    "Keeping existing backup (original values) at $backup"  # a second -Apply must not overwrite the originals
+} else {
+    $current | ConvertTo-Json | Set-Content $backup
+}
 powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0
 if ($LidDoNothing) { powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0 }
 powercfg /setactive SCHEME_CURRENT

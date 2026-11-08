@@ -62,6 +62,26 @@ System log that no "Idle Timeout" standby occurs during a monitored day.
   running runners and exit. No duplicate is created and no restart is needed. After the next log-on the tasks own
   supervision.
 
+## 3a. Applied 2026-11-08 (operator-approved) and verified
+| Change | Result |
+| --- | --- |
+| Power plan (`power_settings.ps1 -Apply`) | AC sleep 180 s → **never**. AC display-off stays 180 s. DC (battery) sleep 180 s and display 180 s unchanged. Lid action unchanged. Hibernate unchanged. Original values in `ops/windows/power_settings_backup.json` (git-ignored) |
+| Rollback | Verified: `-Revert` restored 180 s and removed the backup; re-applied. Fixed a bug found in testing: a second `-Apply` used to overwrite the original backup and now keeps it |
+| Sleep verification | No process holds a display request. Over 25 min, user-input idle reached 1,037 s and the System log recorded **0 Modern Standby entries** (no Kernel-Power events at all). Before the change the PC entered standby after 180 s idle. Screen-off itself is not logged on this machine |
+| Scheduled tasks (`scheduled_tasks.ps1 -Apply -KeepAwake system`) | **Kronos Shadow XAUUSD**, **Kronos Shadow BTCUSDT** (log-on + 15-min check, IgnoreNew, Interactive) and **Kronos Daily Health** (00:15 local) registered |
+| Before or after sign-in? | **After sign-in only.** The tasks use an Interactive principal, `AutoAdminLogon` is not set, and the MT5 terminal needs the user session. After a reboot nothing runs until the user signs in, then both supervisors start at log-on. Pre-login startup would need a stored password or S4U task (not configured; requires approval and would not work for MT5) |
+| Supervisor hardening found during testing | Runner output was piped through the supervisor, so killing a supervisor killed its runner (reproduced with a synthetic runner). Supervisors now start runners with `Start-Process` and redirect output to `<state>\logs\runner_<time>.{out,err}.log`, so runners survive supervisor death and are adopted |
+| Recovery tests (synthetic runner + temporary task, then removed) | Orphaned runner adopted (no duplicate). Second trigger ignored (IgnoreNew). Killed runner restarted once after the grace period. STOP made the runner and supervisor stop with no restart. A trigger with STOP present started nothing and left STOP in place |
+| Production handover | BTC: the task supervisor **adopted** the running runner, which was not restarted. XAUUSD: retiring the legacy supervisor (which held the display request) needed a graceful STOP → restart. Interruption **05:54:06–05:55:51 UTC (1 min 45 s)**, market closed, pre-forward warm-up. Backup `state/backups/phase2d_shadow_20261108T055357Z_pre_task_handover`. Recovery exact (6,166 bars, 188 signals, 0 mismatches) |
+
+Notes:
+- The legacy BTC supervisor (`run_binance_shadow.ps1`, PID 33048) still owns its runner. The BTC task supervisor
+  adopts it, so if either dies the other path recovers. A runner restarted by the legacy supervisor within its
+  30 s delay is re-adopted (the task supervisor waits a 90 s grace period).
+- The main checkout must stay on a branch containing `ops/windows/` (currently `ops/dual-runner-reliability`)
+  while the tasks are registered. To remove the tasks: `ops/windows/scheduled_tasks.ps1 -Remove` (this does not
+  stop running supervisors; use STOP for that).
+
 ## 4. Runbook
 | Action | Command / file |
 | --- | --- |

@@ -582,5 +582,57 @@ Details and evidence: `docs/operations-windows.md`.
 
 ---
 
+## Milestone: Reliability changes applied (2026-11-08, operator-approved)
+
+Branch `ops/dual-runner-reliability` (PR #16). Details: `docs/operations-windows.md` §3a.
+
+### Applied and verified
+- **Power:**
+  - AC sleep is now *never*; AC display-off stays 3 min; battery and lid settings unchanged.
+  - Rollback verified (revert → 180 s → re-apply); originals saved.
+  - Over 25 min, user-input idle reached 1,037 s with **0 standby entries** and no Kernel-Power events.
+  - No process holds a display request.
+- **Scheduled tasks:**
+  - XAUUSD and BTCUSDT supervisors (log-on + 15-min check, IgnoreNew) plus the daily health report are registered.
+  - Startup is **after sign-in only**: Interactive principal, no auto-logon, MT5 needs the user session.
+- **Supervisor hardening:** runners now write logs directly (no pipe), so they survive a supervisor kill and are
+  adopted. Before this change a supervisor kill killed its runner (reproduced).
+- **Safe recovery tests:** run with a synthetic runner and a temporary task (removed afterwards). Adopt, no
+  duplicate, IgnoreNew, restart after a runner kill and STOP precedence all behaved as designed.
+- **Production handover:**
+  - BTC: runner **adopted, not restarted**.
+  - XAUUSD: one graceful restart was needed to retire the legacy supervisor's display request. Downtime 1 min 45 s
+    (05:54:06–05:55:51 UTC), market closed, pre-forward warm-up. Recovery exact (0 signal mismatches); backup taken
+    first.
+  - STOP verified in production: the task supervisor did not restart while STOP existed.
+
+### Runner health (≈06:00 UTC)
+- **XAUUSD:**
+  - Heartbeats every 60 s, MT5 connected, market closed until 23:00 UTC, entries blocked.
+  - 28 books at starting equity; demo account unchanged (3,000 USD, 0 positions/orders).
+- **BTC/USDT:**
+  - Heartbeats `ok`, WebSocket connected (~125k messages, 0 reconnects).
+  - REST fallback exercised live (05:47:15 → back to WebSocket in 3.7 s).
+  - One 141 s heartbeat gap (05:50:37–05:52:58) while data kept streaming. Its heartbeat is written by the main
+    loop, so it pauses when a REST call is slow. Follow-up: a heartbeat thread like XAUUSD's (needs a BTC restart;
+    deferred).
+- **Combined health report** (`research/output/health/health_20261108T0601Z.md`, last hour):
+  - XAUUSD 84% runner uptime (the 05:06 termination); alerts are the two intentional STOPs.
+  - BTC 100% uptime, fresh data 100%, no alerts.
+  - Pre-registration consistent for both.
+
+### Safety
+- Risk limits unchanged (0.5% / 1.5% / 1%; hard 0.5% ceiling).
+- No order path: MT5 proxy blocks all order helpers; Binance is market data plus a testnet-only account GET; testnet
+  `submit()` refuses.
+- Frozen parameters and pre-registration hashes unchanged; no simulated account reset.
+- Process-termination auditing **not** enabled (as instructed).
+
+### Tests
+`pytest -q tests --ignore=tests/test_kronos_regression.py` → **424 passed, 8 deselected** (Python 3.11.18); ruff
+clean.
+
+---
+
 ## Update policy
 Only mark items done when code, tests or verifiable operational evidence exists. For every milestone add date, branch/commit, command/test results, blockers, and next step. Do not treat plans or historical conversation claims as verified implementation.
