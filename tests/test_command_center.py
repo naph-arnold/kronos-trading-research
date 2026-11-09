@@ -519,3 +519,22 @@ def test_equity_is_per_book_from_recorded_trades_and_warmup_is_separated(tmp_pat
     warm = services.history(cfg, "xauusd", "signals", status="warmup")
     assert {r["signal_id"] for r in fwd["rows"]} == {"sig1", "rnd1"} and all(r["phase"] == "forward" for r in fwd["rows"])
     assert [r["signal_id"] for r in warm["rows"]] == ["warm1"]
+
+
+def test_strategy_with_own_runner_uses_its_own_heartbeat_and_rules(tmp_path):
+    cfg = _cfg(tmp_path)
+    _store(Path(cfg["markets"]["xauusd"]["state_dir"]), n_bars=40)
+    repo = Path(cfg["strategies"][1]["repo"])
+    (repo / "research/forward_test").mkdir(parents=True, exist_ok=True)
+    (repo / "research/forward_test/p.json").write_text(json.dumps({"unseen_window_starts": "2099-01-05T00:00:00+00:00"}))
+    a = json.loads((repo / "research/configs/a.json").read_text())
+    (repo / "research/configs/a.json").write_text(json.dumps({**a, "preregistration": "research/forward_test/p.json"}))
+    _store(Path(cfg["strategies"][1]["state_dir"]), heartbeat_age=timedelta(seconds=7), interval="15m")
+    services.CACHE._items.clear()
+    ds = {x["id"]: x for x in services.overview(cfg)["decisions"]}
+    d = ds["xau_selective_a"]
+    assert d["state"] == "waiting_for_signal" and "5m bar" in d["headline"]
+    assert "channel breakout" not in d["headline"] and d["forward_start"] == "2099-01-05T00:00:00+00:00"
+    assert "Warm-up period until" in d["explanation"]
+    age = lambda x: int(next(c["detail"] for c in x["checks"] if c["check"] == "Runner heartbeat").split("last ")[1].split(" s")[0])  # noqa: E731
+    assert age(ds["xau_orb"]) - age(d) == 23  # own runner beat 7 s before the reference, the gold runner 30 s

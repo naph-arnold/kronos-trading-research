@@ -274,7 +274,12 @@ def strategy_decision(cfg: dict, strategy: dict, market: dict, panel: dict, now:
     params = scfg.get("params", {})
     out = {"id": strategy["id"], "name": strategy["name"], "market": strategy["market"], "strategy_key": key,
            "generated_at": _iso(now), "checks": [], "session": None, "setup": None, "blackouts": None,
-           "signals": None}
+           "signals": None, "forward_start": None}
+    try:  # pre-registered forward boundary, read from the frozen pre-registration file
+        prereg = json.loads((Path(runner["repo"]) / run_cfg["preregistration"]).read_text(encoding="utf-8"))
+        out["forward_start"] = prereg.get("unseen_window_starts")
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
 
     # -- session / evaluation schedule (derived from frozen params + calendar) -------------------------------------
     if strategy["market"] == "xauusd":
@@ -410,16 +415,27 @@ def strategy_decision(cfg: dict, strategy: dict, market: dict, panel: dict, now:
         else:
             state, headline = "waiting_for_session", "Today's entry window has ended"
             expl = "The next opening range forms in the next session window shown below."
-    else:  # continuous (Donchian)
-        if reasons:
-            state, headline = "blocked", "A guard blocks new entries"
-            expl = "; ".join(reasons)
-        else:
-            state, headline = "waiting_for_signal", "Monitoring every hourly close for a channel breakout"
-            expl = ("A signal requires a 1-hour close above the highest high of the previous "
-                    f"{params.get('entry_lookback', '?')} bars (long-only)." )
+    elif strategy["market"] == "xauusd" and market.get("market_open") is False:
+        state, headline = "waiting_for_session", "Market closed: waiting for the next session"
+        expl = "The gold market is closed (runner heartbeat); bars are evaluated again when it reopens."
+    elif reasons:
+        state, headline = "blocked", "A guard blocks new entries"
+        expl = "; ".join(reasons)
+    elif key == "donchian":
+        state, headline = "waiting_for_signal", "Monitoring every hourly close for a channel breakout"
+        expl = ("A signal requires a 1-hour close above the highest high of the previous "
+                f"{params.get('entry_lookback', '?')} bars (long-only).")
+    else:  # e.g. Selective Strategy A: every closed bar of its own interval while the market is open
+        interval = runner.get("store_interval") or "bar"
+        state, headline = "waiting_for_signal", f"Monitoring every closed {interval} bar for a setup"
+        expl = ("The frozen multi-timeframe rules (4H direction, structure, pullback and 5M confirmation) are "
+                "evaluated on each closed bar; a signal is recorded only when every condition holds.")
     if state in ("waiting_for_signal", "monitoring") and reasons:
         state = "blocked"
+    fwd = out.get("forward_start")
+    if fwd and now < parse_time(fwd):
+        expl = (f"Warm-up period until the pre-registered forward start {fwd}: signals before it are recorded as "
+                "warm-up only (not evidence, never traded). " + expl)
     out.update(state=state, state_label=STATES[state], headline=headline, explanation=expl)
     # Session / setup checks for the checklist
     if key.startswith("orb"):
@@ -447,9 +463,17 @@ def strategy_decision(cfg: dict, strategy: dict, market: dict, panel: dict, now:
 def decision_status(cfg: dict, markets: dict, panels: list[dict], now: datetime, cache) -> list[dict]:
     out = []
     by_id = {p["id"]: p for p in panels}
+    from command_center.services import market_status
+
     for s in cfg["strategies"]:
         try:
-            out.append(strategy_decision(cfg, s, markets.get(s["market"], {}), by_id.get(s["id"], {}), now, cache))
+            market = markets.get(s["market"], {})
+            if s.get("state_dir"):  # a strategy with its own runner (Strategy A) is judged by ITS heartbeat
+                own = Path(s["state_dir"])
+                market = (market_status(s["id"], {"label": s["name"], "venue": market.get("venue", ""),
+                                                  "state_dir": str(own)}, now=now)
+                          if (own / "shadow.sqlite").exists() else {"available": False, "runner": "not started"})
+            out.append(strategy_decision(cfg, s, market, by_id.get(s["id"], {}), now, cache))
         except Exception as exc:  # noqa: BLE001 - one strategy's problem never hides the others
             out.append({"id": s["id"], "name": s["name"], "market": s["market"], "strategy_key": s["strategy_key"],
                         "state": "unavailable", "state_label": STATES["unavailable"],
