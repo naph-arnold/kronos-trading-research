@@ -8,7 +8,7 @@ import { usePoll } from "@/lib/api";
 import { dash, fmtMoney, fmtNum, fmtSigned, fmtTime, tone } from "@/lib/format";
 import type { ChartSignal, SignalDetail } from "@/lib/types";
 import type { Layers } from "@/components/CandleChart";
-import { Empty, ErrorNote, KindTag, Loading, Panel, Stat, StateBadge } from "@/components/ui";
+import { Empty, ErrorNote, KindTag, Loading, Panel, PhaseTag, Stat, StateBadge } from "@/components/ui";
 
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 const TF: Record<string, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
@@ -41,6 +41,7 @@ function SignalView() {
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px]">
             <span className="rounded-md bg-ink-800 px-2 py-0.5">{data.strategy}</span>
             <span className={data.side === "long" ? "text-up" : "text-down"}>{data.side}</span>
+            <PhaseTag status={data.status} />
             <StateBadge state={data.status === "evaluated" ? "ok" : data.status === "warmup" ? "closed" : "paused"} label={data.status} />
             <span className="text-mute">bar close {fmtTime(data.bar_close)}</span>
           </div>

@@ -8,7 +8,7 @@ import { dash, fmtNum, fmtTime } from "@/lib/format";
 import type { ChartData, ChartSignal, SignalRow } from "@/lib/types";
 import type { Layers } from "@/components/CandleChart";
 import { STRATEGY_COLOR } from "@/components/CandleChart";
-import { Empty, ErrorNote, KindTag, Panel, StateBadge } from "@/components/ui";
+import { Empty, ErrorNote, KindTag, Panel, PhaseTag, StateBadge } from "@/components/ui";
 
 const CandleChart = dynamic(() => import("@/components/CandleChart"), { ssr: false });
 
@@ -22,7 +22,7 @@ type Avail = Record<string, { available: boolean; sources: { kind: string; base:
 
 const LAYER_LABELS: [keyof Layers, string][] = [
   ["volume", "Volume"], ["ema", "EMA 20/50"], ["signals", "Signals"], ["controls", "Baselines & controls"],
-  ["warmup", "Warm-up signals"], ["trades", "Sim. entries/exits"], ["levels", "SL / TP"], ["ranges", "Opening ranges"],
+  ["warmup", "Warm-up signals (grey, not evidence)"], ["trades", "Sim. entries/exits"], ["levels", "SL / TP"], ["ranges", "Opening ranges"],
   ["structure", "Swing structure"],
 ];
 
@@ -187,6 +187,7 @@ function SignalDetail({ row, sig, onClear }: { row: SignalRow | null; sig: Chart
       <dl>
         <div className="kv"><dt>Signal</dt><dd className="truncate">{sig.signal_id}</dd></div>
         <div className="kv"><dt>Bar close</dt><dd>{fmtTime(sig.bar_close)}</dd></div>
+        <div className="kv"><dt>Phase</dt><dd><PhaseTag status={sig.status} /></dd></div>
         <div className="kv"><dt>Side · status</dt><dd>{sig.side} · {sig.status}</dd></div>
         <div className="kv"><dt>Entry / stop / target</dt><dd>{fmtNum(sig.entry)} / {fmtNum(sig.stop)} / {fmtNum(sig.take_profit)}</dd></div>
         <div className="kv"><dt>Risk decisions</dt><dd>{sig.decisions.approved} approved · {sig.decisions.rejected} rejected</dd></div>

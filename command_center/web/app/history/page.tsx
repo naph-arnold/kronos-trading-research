@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePoll } from "@/lib/api";
 import { dash, fmtMoney, fmtNum, fmtPct, fmtShort, fmtSigned, tone } from "@/lib/format";
 import type { EquityData, GrokRoom, HDecision, HEvent, HistoryPage, HSignal, HTrade, Meta } from "@/lib/types";
-import { DataTable, Empty, ErrorNote, KindTag, Panel, StateBadge, type Column } from "@/components/ui";
+import { DataTable, Empty, ErrorNote, KindTag, Panel, PhaseTag, Stat, StateBadge, type Column } from "@/components/ui";
 import { IconSearch } from "@/components/icons";
 
 const EquityChart = dynamic(() => import("@/components/EquityChart"), { ssr: false });
@@ -18,7 +18,7 @@ const TABS = [
 type Tab = (typeof TABS)[number]["id"];
 
 const STATUS: Record<string, [string, string][]> = {
-  signals: [["", "All statuses"], ["evaluated", "Evaluated (forward)"], ["pending", "Pending"], ["expired", "Expired"], ["warmup", "Warm-up (not evidence)"], ["rejected_unanchored", "Rejected (unanchored)"]],
+  signals: [["", "Forward + warm-up"], ["forward", "Forward test only"], ["warmup", "Warm-up only (not evidence)"], ["evaluated", "Forward · evaluated"], ["pending", "Forward · pending"], ["expired", "Forward · expired"], ["rejected_unanchored", "Rejected (unanchored)"]],
   decisions: [["", "All decisions"], ["approved", "Approved"], ["rejected", "Rejected"]],
   trades: [["", "All exits"], ["stop", "Stop"], ["take_profit", "Take profit"], ["time_exit", "Time exit"]],
   events: [["", "All events"], ["interruption", "Interruptions"], ["alert", "Alerts"], ["routine", "Routine"]],
@@ -74,7 +74,8 @@ export default function HistoryPage() {
     { key: "at", label: "Bar close", render: (r) => <span className="num whitespace-nowrap">{fmtShort(r.at)}</span>, sort: (r) => r.at },
     { key: "strategy", label: "Strategy", render: (r) => <span className={r.strategy.startsWith("random") ? "text-mute" : ""}>{r.strategy}</span>, sort: (r) => r.strategy },
     { key: "side", label: "Side", render: (r) => sideCell(r.side), sort: (r) => r.side },
-    { key: "status", label: "Status", render: (r) => <span className={r.status === "warmup" ? "text-mute" : "text-slate-200"}>{r.status}</span>, sort: (r) => r.status },
+    { key: "phase", label: "Phase", render: (r) => <PhaseTag status={r.status} compact />, sort: (r) => (r.status === "warmup" ? 0 : 1) },
+    { key: "status", label: "Status", render: (r) => <span className={r.status === "warmup" ? "text-mute" : "text-slate-200"}>{r.status === "warmup" ? "—" : r.status}</span>, sort: (r) => r.status },
     { key: "entry", label: "Entry", align: "right", render: (r) => fmtNum(r.entry), sort: (r) => r.entry },
     { key: "stop", label: "Stop", align: "right", render: (r) => fmtNum(r.stop) },
     { key: "tp", label: "Target", align: "right", render: (r) => fmtNum(r.take_profit) },
@@ -166,8 +167,13 @@ export default function HistoryPage() {
           <ErrorNote error={list.error} updatedAt={list.updatedAt} />
           {!list.data ? <div className="skeleton h-64" /> : !list.data.available ? <Empty>{list.data.note}</Empty> : (
             <>
-              {tab === "signals" && <DataTable rows={list.data.rows as unknown as HSignal[]} columns={sigCols} rowKey={(r) => r.signal_id} onRow={(r) => open(r.signal_id)}
-                empty={<Empty>No recorded signals match these filters.</Empty>} />}
+              {tab === "signals" && (
+                <>
+                  <p className="mb-2 text-[11.5px] text-mute"><PhaseTag status="forward" compact /> generated live after the pre-registered boundary (evidence) · <PhaseTag status="warmup" compact /> generated on history before it to prime the strategy (never evaluated, never traded).</p>
+                  <DataTable rows={list.data.rows as unknown as HSignal[]} columns={sigCols} rowKey={(r) => r.signal_id} onRow={(r) => open(r.signal_id)}
+                    empty={<Empty>{status === "forward" ? "No forward-test signals recorded yet." : "No recorded signals match these filters."}</Empty>} />
+                </>
+              )}
               {tab === "decisions" && <DataTable rows={list.data.rows as unknown as HDecision[]} columns={decCols} rowKey={(r) => r.book + r.signal_id} onRow={(r) => open(r.signal_id)}
                 empty={<Empty>No risk decisions recorded{total === 0 && !dq ? " yet: no forward signal has reached the risk engine" : " for these filters"}.</Empty>} />}
               {tab === "trades" && <DataTable rows={list.data.rows as unknown as HTrade[]} columns={tradeCols} rowKey={(r) => r.book + r.signal_id} onRow={(r) => open(r.signal_id)}
@@ -221,33 +227,36 @@ export default function HistoryPage() {
   );
 }
 
+/** One simulated book at a time: books are alternative simulations of the same signals, never a combined account. */
 function EquityPanel({ data }: { data: EquityData }) {
-  const [sel, setSel] = useState<string[]>([]);
-  useEffect(() => {
-    const primary = data.books.filter((b) => !b.strategy.startsWith("random")).sort((a, b) => b.initial_equity - a.initial_equity || b.commission - a.commission);
-    setSel(primary.slice(0, 2).map((b) => b.book));
-  }, [data]);
-  const shown = data.books.filter((b) => sel.includes(b.book));
+  const ordered = useMemo(() => [...data.books].sort((a, b) =>
+    Number(a.strategy.startsWith("random")) - Number(b.strategy.startsWith("random")) || b.initial_equity - a.initial_equity || b.commission - a.commission), [data]);
+  const [book, setBook] = useState<string>("");
+  useEffect(() => { if (!ordered.some((b) => b.book === book)) setBook(ordered[0]?.book ?? ""); }, [ordered, book]);
+  const b = ordered.find((x) => x.book === book);
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
-        {data.books.map((b) => (
-          <button key={b.book} className={`btn ${sel.includes(b.book) ? "btn-on" : ""}`}
-            onClick={() => setSel(sel.includes(b.book) ? sel.filter((x) => x !== b.book) : [...sel, b.book])}>{b.book}</button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-[12px] text-mute" htmlFor="eqbook">Simulated book</label>
+        <select id="eqbook" className="input min-w-[16rem]" value={book} onChange={(e) => setBook(e.target.value)}>
+          {ordered.map((x) => <option key={x.book} value={x.book}>{x.book} · ${x.initial_equity.toLocaleString("en-US")} · cost {x.commission}{x.strategy.startsWith("random") ? " (control)" : ""}</option>)}
+        </select>
+        <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-mute">one book at a time · never summed</span>
       </div>
-      {shown.length === 0 ? <Empty>Select one or more books.</Empty> : <EquityChart books={shown} />}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {shown.map((b) => (
-          <div key={b.book} className="card p-3 text-[12px]">
-            <div className="num truncate text-slate-200">{b.book}</div>
-            <div className="mt-1 flex justify-between"><span className="text-mute">Equity</span><span className="num">{fmtNum(b.last)}</span></div>
-            <div className="flex justify-between"><span className="text-mute">Return</span><span className={`num ${tone(b.last - b.initial_equity)}`}>{fmtSigned(((b.last / b.initial_equity) - 1) * 100, 2, "%")}</span></div>
-            <div className="flex justify-between"><span className="text-mute">Max drawdown</span><span className="num">{fmtPct(-b.max_drawdown_pct)}</span></div>
-            <div className="flex justify-between"><span className="text-mute">Equity marks</span><span className="num">{b.points}</span></div>
+      {!b ? <Empty>No simulated books recorded.</Empty> : (
+        <>
+          <div className="grid grid-cols-2 gap-4 rounded-xl border border-line bg-ink-950/40 p-3 sm:grid-cols-5">
+            <Stat label="Starting equity" value={fmtMoney(b.initial_equity, 0)} kind="simulated" />
+            <Stat label="Equity now" value={fmtMoney(b.last)} sub={fmtSigned(((b.last / b.initial_equity) - 1) * 100, 2, "%")} valueClass={tone(b.last - b.initial_equity)} />
+            <Stat label="Closed trades" value={b.trades} sub={`realized ${fmtSigned(b.realized_pnl)}`} />
+            <Stat label="Max drawdown" value={fmtPct(-b.max_drawdown_pct)} kind="derived" />
+            <Stat label="Equity marks" value={b.marks} sub="while a position was open" />
           </div>
-        ))}
-      </div>
+          {b.points === 0 ? (
+            <Empty>No closed simulated trades or equity marks yet for {b.book}: the curve stays at its starting equity of {fmtMoney(b.initial_equity, 0)}. Nothing is drawn until the runner records a trade.</Empty>
+          ) : <EquityChart books={[b]} />}
+        </>
+      )}
       <p className="text-[11px] text-mute">{data.note}</p>
     </div>
   );

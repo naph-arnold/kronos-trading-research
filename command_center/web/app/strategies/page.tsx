@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePoll } from "@/lib/api";
 import { dash, fmtMoney, fmtNum, fmtPct, fmtSigned, fmtTime, tone } from "@/lib/format";
 import type { StrategyPanel } from "@/lib/types";
-import { Empty, ErrorNote, KindTag, Loading, Panel, Stat, StateBadge } from "@/components/ui";
+import { Empty, ErrorNote, KindTag, Loading, Panel, PhaseTag, Stat, StateBadge } from "@/components/ui";
 
 function StrategyCard({ s }: { s: StrategyPanel }) {
   const m = s.metrics;
@@ -33,7 +33,8 @@ function StrategyCard({ s }: { s: StrategyPanel }) {
           <>
             <div className="flex items-center gap-2 text-[11px] text-mute"><KindTag kind="simulated" /> shadow-book results, headline book</div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4">
-              <Stat label="Signals" value={s.signals?.total ?? 0} sub={`${s.signals?.forward ?? 0} forward · ${s.signals?.by_status?.warmup ?? 0} warm-up`} />
+              <Stat label="Forward signals" value={s.signals?.forward ?? 0}
+                sub={<span className="inline-flex items-center gap-1"><PhaseTag status="warmup" compact /> {s.signals?.by_status?.warmup ?? 0} excluded</span>} />
               <Stat label="Sim. trades" value={m?.trades ?? 0} sub={m ? `${m.wins} won · ${m.losses} lost` : dash} />
               <Stat label="Net after est. costs" value={fmtMoney(m?.net_pnl)} valueClass={tone(m?.net_pnl)}
                 sub={m ? `${fmtSigned(m.net_return_pct, 2, "%")} · costs ${fmtMoney(m.costs.spread_and_slippage + m.costs.commission + m.costs.swap)}` : dash} />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ColorType, createChart, type UTCTimestamp } from "lightweight-charts";
+import { ColorType, createChart, LineType, type UTCTimestamp } from "lightweight-charts";
 import type { EquityBook } from "@/lib/types";
 import { fmtTime } from "@/lib/format";
 
@@ -22,7 +22,7 @@ export default function EquityChart({ books, height = 320 }: { books: EquityBook
     });
     books.forEach((b, i) => {
       const color = PALETTE[i % PALETTE.length];
-      const eq = c.addLineSeries({ color, lineWidth: 2, title: b.book, priceLineVisible: false });
+      const eq = c.addLineSeries({ color, lineWidth: 2, title: b.book, priceLineVisible: false, lineType: LineType.WithSteps });
       eq.setData(b.equity.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
       const dd = c.addAreaSeries({ priceScaleId: "dd", lineColor: color, topColor: "rgba(239,83,80,0.0)",
         bottomColor: "rgba(239,83,80,0.25)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });

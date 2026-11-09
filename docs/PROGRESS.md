@@ -531,6 +531,41 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Phase 5 — Command Center V1.2 targeted improvements (2026-11-09)
+Branch `feat/command-center-v1` (PR #24). Status: **Verified**. The review asked for targeted changes only; there was
+no redesign.
+
+**Added** (details in [command-center.md](command-center.md) section 8):
+- Live Decision Status (`command_center/decisions.py`): the state per strategy, a checklist, the next session window
+  from the frozen parameters and CME calendar, the current setup replayed with the frozen strategy code on recorded
+  bars, and event blackouts.
+- Alerts split into active, connection, resolved and past STOP/KILL.
+- Forward and warm-up tags in every view.
+- The Overview reorganised, with a recent-activity feed.
+- A per-book equity and drawdown view built from recorded trades (never summed).
+- BLAS limited to 1 thread (79 MB private memory).
+
+**BTC heartbeat gaps** (section 8.1):
+- One of three is explained by the runner's own records: the first live Kronos model load blocked the polling loop.
+- Two are undetermined; no cause is guessed.
+- The recommended runner change needs approval.
+
+**Tests:**
+- Dashboard: 29 passed in `.venv-cc` (6 new: ORB windows with holidays and DST, ORB and Donchian frozen-code replays,
+  decision states incl. STOP, alert grouping, per-book equity and the forward/warm-up filter).
+- Full suite in `.venv311`: 606 passed, 3 skipped (FastAPI tests; they run in `.venv-cc`).
+- Frontend: `tsc` clean; `next build` OK.
+
+**Not changed:**
+- the runners, their working directories or tasks;
+- strategy settings or the preregistrations;
+- risk limits;
+- Grok, which stays not activated;
+- Strategy A, which is not launched;
+- no service was registered and nothing was merged.
+
+---
+
 ## Milestone: Phase 5 — Command Center V1 completion (sections 7–11) (2026-11-09)
 Branch `feat/command-center-v1` (PR #24). Status: **Verified**. Only missing functionality was added; completed
 features were kept.

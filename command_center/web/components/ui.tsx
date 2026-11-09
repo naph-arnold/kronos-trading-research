@@ -64,6 +64,40 @@ export function StateBadge({ state, label }: { state: string | null | undefined;
   );
 }
 
+/** Forward-test vs warm-up, shown wherever a signal appears. Warm-up signals were generated on history before the
+ * forward boundary to prime the strategy: they are not evidence and are never traded. */
+export function PhaseTag({ status, compact = false }: { status: string | null | undefined; compact?: boolean }) {
+  const warm = status === "warmup";
+  return (
+    <span title={warm ? "Warm-up: generated on history before the forward-test boundary. Not evidence; never traded."
+      : "Forward test: generated live after the pre-registered boundary. Counts as evidence."}
+      className={`inline-flex shrink-0 items-center rounded border px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wider ${warm
+        ? "border-dashed border-slate-500/60 text-slate-400" : "border-sim/50 bg-sim/15 text-sim"}`}>
+      {warm ? (compact ? "warm-up" : "warm-up · not evidence") : "forward"}
+    </span>
+  );
+}
+
+const DECISION_STYLE: Record<string, string> = {
+  waiting_for_signal: "border-info/40 bg-info/10 text-info",
+  monitoring: "border-info/40 bg-info/10 text-info",
+  waiting_for_session: "border-slate-500/50 bg-slate-500/10 text-slate-300",
+  in_position: "border-sim/50 bg-sim/15 text-sim",
+  blocked: "border-warn/50 bg-warn/10 text-warn",
+  runner_down: "border-down/50 bg-down/10 text-down",
+  unavailable: "border-down/50 bg-down/10 text-down",
+  not_launched: "border-slate-600/60 bg-transparent text-slate-400",
+};
+
+export function DecisionBadge({ state, label }: { state: string; label?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${DECISION_STYLE[state] ?? DECISION_STYLE.not_launched}`}>
+      <span className={`h-1.5 w-1.5 rounded-full bg-current ${state === "waiting_for_signal" || state === "monitoring" ? "animate-pulse" : ""}`} />
+      {label ?? state.replace(/_/g, " ")}
+    </span>
+  );
+}
+
 export function Panel({ title, right, children, className = "" }: { title: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <section className={`panel ${className}`}>

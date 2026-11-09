@@ -416,3 +416,106 @@ def test_scrub_removes_local_paths_in_both_slash_styles(tmp_path):
     text = json.dumps(services.scrub(value, cfg))
     assert str(tmp_path) not in text and str(tmp_path).replace(chr(92), "/") not in text
     assert str(Path.home()) not in text and "plain" in text and "<xauusd state>" in text
+
+
+# --------------------------------------------------------------------------- V1.2: decision status, alerts, equity
+
+def _bars(start: datetime, n: int, step: int, symbol="XAUUSD", interval="15m", shape=None):
+    out = []
+    for i in range(n):
+        t = start + timedelta(seconds=step * i)
+        lo, hi = shape(t) if shape else (D("2000"), D("2004"))
+        out.append(Bar.create(symbol=symbol, interval=interval, open_time=t, open=lo + 1, high=hi, low=lo, close=lo + 2,
+                              volume=D("1")))
+    return out
+
+
+def test_orb_windows_follow_frozen_params_and_skip_holidays_and_weekends():
+    from command_center import decisions
+    from trading.marketcal.holidays import build_xauusd_calendar
+    from trading.sessions import XAUUSD_NY_MARKET_HOURS
+
+    now = datetime(2026, 12, 24, 20, 0, tzinfo=UTC)
+    cal, _ = build_xauusd_calendar(XAUUSD_NY_MARKET_HOURS, now.date() - timedelta(days=3), now.date() + timedelta(days=20))
+    w = decisions.orb_windows({"session": "newyork", "range_minutes": 30, "entry_window_minutes": 180}, now, cal)
+    assert w[0]["date"] == "2026-12-28"  # Christmas (Fri) and the weekend have no opening range
+    assert w[0]["range_from"] == "2026-12-28T13:20:00+00:00"  # 08:20 New York (EST)
+    assert w[0]["entry_to"] == "2026-12-28T16:50:00+00:00"
+    summer = decisions.orb_windows({"session": "newyork"}, datetime(2026, 7, 7, 0, 0, tzinfo=UTC), None)
+    assert summer[0]["range_from"] == "2026-07-07T12:20:00+00:00"  # EDT
+
+
+def test_orb_replay_uses_the_frozen_strategy_on_recorded_bars():
+    from command_center import decisions
+
+    def shape(t):  # the two opening-range bars (13:30, 13:45 UTC = 08:30, 08:45 NY) span 1995-2010
+        return (D("1995"), D("2010")) if t.hour == 13 and t.minute in (30, 45) else (D("2000"), D("2004"))
+    bars = _bars(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), 32, 900, shape=shape)
+    s = decisions.replay_orb(bars, {"session": "newyork"}, bars[-1].close_time)
+    assert s["available"] and s["range_low"] == 1995 and s["range_high"] == 2010
+    assert s["session_day"] == "2026-11-10" and s["signal_today"] is False
+    assert s["long_trigger"] == pytest.approx(2010 + 0.1 * s["atr"])
+    assert s["range_filter_ok"] == (0.5 <= 15 / s["atr"] <= 3.0)
+
+
+def test_donchian_replay_reports_the_channel_the_next_close_must_exceed():
+    from command_center import decisions
+
+    bars = _bars(datetime(2026, 11, 1, tzinfo=UTC), 30, 3600, symbol="BTCUSDT", interval="1h",
+                 shape=lambda t: (D("100") + t.hour, D("110") + t.hour))
+    s = decisions.replay_donchian(bars, {"entry_lookback": 10})
+    assert s["channel_high"] == max(float(b.high) for b in bars[-10:])
+    assert s["last_close"] == float(bars[-1].close) and s["distance"] > 0
+
+
+def test_decision_status_is_built_from_recorded_state_only(tmp_path):
+    cfg = _cfg(tmp_path)
+    _store(Path(cfg["markets"]["xauusd"]["state_dir"]), n_bars=40)
+    o = services.overview(cfg)
+    d = {x["id"]: x for x in o["decisions"]}
+    assert d["xau_selective_a"]["state"] == "not_launched"
+    orb = d["xau_orb"]
+    assert orb["state"] in ("waiting_for_session", "monitoring", "waiting_for_signal", "blocked")
+    assert {c["check"] for c in orb["checks"]} >= {"Runner heartbeat", "Market data", "Deterministic guards"}
+    assert orb["signals"]["forward_count"] == 0 and orb["signals"]["warmup_count"] == 0
+    Path(cfg["markets"]["xauusd"]["state_dir"], "STOP").write_text("")
+    services.CACHE._items.clear()
+    o = services.overview(cfg)
+    orb = next(x for x in o["decisions"] if x["id"] == "xau_orb")
+    assert orb["state"] == "blocked" and "STOP file present" in orb["blocking_reasons"]
+    assert any(a["text"] == "STOP file present" for a in o["alert_groups"]["active"])
+
+
+def test_alerts_separate_active_connection_resolved_and_past_stop_kill(tmp_path):
+    cfg = _cfg(tmp_path)
+    db = _store(Path(cfg["markets"]["xauusd"]["state_dir"]))
+    s = ShadowStore(db)
+    with s.transaction():
+        s.event(NOW - timedelta(hours=3), "stop_file")
+        s.event(NOW - timedelta(hours=2), "data_interruption", error="x")
+        s.event(NOW - timedelta(hours=2), "calendar_refresh_failed", errors={"bls": "timeout"})
+        s.event(NOW - timedelta(hours=1), "calendar_refresh", errors={})
+    s.close()
+    g = services.overview(cfg)["alert_groups"]
+    # the synthetic store has no pre-registration hash (correctly active); nothing historical is active
+    assert [a["text"] for a in g["active"]] == ["Pre-registration hash mismatch"]
+    assert [x["kind"] for x in g["stop_kill"]] == ["stop_file"]
+    assert g["connection"][0]["counts"] == {"data_interruption": 1} and g["connection"][0]["recovered"] is True
+    assert any(x["kind"] == "calendar_refresh_failed" and "succeeded" in x["resolution"] for x in g["resolved"])
+
+
+def test_equity_is_per_book_from_recorded_trades_and_warmup_is_separated(tmp_path):
+    cfg = _cfg(tmp_path)
+    db = _with_trade(cfg)
+    s = ShadowStore(db)
+    with s.transaction():
+        s.record_signal("orb_newyork", "warm1", NOW - timedelta(days=3), "warmup", {"side": "long"})
+    s.close()
+    e = {b["book"]: b for b in services.equity(cfg, "xauusd")["books"]}
+    b = e["orb_newyork.e10000.c7"]
+    assert b["trades"] == 1 and b["realized_pnl"] == -50 and b["last"] == 9950 and b["max_drawdown_pct"] == -0.5
+    assert e["orb_newyork.e10000.c0"]["trades"] == 0 and e["orb_newyork.e10000.c0"]["last"] == 10000  # never summed
+    fwd = services.history(cfg, "xauusd", "signals", status="forward")
+    warm = services.history(cfg, "xauusd", "signals", status="warmup")
+    assert {r["signal_id"] for r in fwd["rows"]} == {"sig1", "rnd1"} and all(r["phase"] == "forward" for r in fwd["rows"])
+    assert [r["signal_id"] for r in warm["rows"]] == ["warm1"]

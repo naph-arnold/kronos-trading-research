@@ -127,6 +127,9 @@ providers (official/licensed, attributed)        market-specific rules          
   - It reads the runners' SQLite stores with `mode=ro` + `query_only`, and recorded CSV history.
   - It reuses the existing reporting code (`market_health`, `book_metrics`, ORB session definition, Grok audit
     verifier).
+- **Decision status (derived, never predictive):** session windows come from the frozen parameters plus
+  the same CME calendar the runners use. The current setup comes from replaying the frozen strategy
+  classes on recorded bars. Guards come from the runners' heartbeats.
 - **No control path:** the API is GET-only. The dashboard cannot place orders, change runners, create STOP/KILL
   files, edit data or activate agents. Python remains the engine; the runners neither import nor depend on it.
 - **Exposure and hygiene:**

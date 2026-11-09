@@ -340,7 +340,25 @@ def overview(cfg: dict) -> dict:
         for book_id, b in sorted((h.get("books") or {}).items()):
             accounts.append({"market": name, "book": book_id, **b, "kind": "simulated"})
     alerts = [{"market": n, "text": a} for n, h in health.items() for a in h.get("alerts", [])]
+    from command_center import decisions as dec
+
+    try:
+        decision = dec.decision_status(cfg, markets, strategies, now, CACHE)
+    except Exception as exc:  # noqa: BLE001 - never hide the rest of the overview
+        decision = [{"id": "all", "state": "unavailable", "headline": f"decision status unavailable ({type(exc).__name__})"}]
+    try:
+        groups = dec.alert_groups(cfg, markets, health, risk, now)
+    except Exception as exc:  # noqa: BLE001
+        groups = {"active": [{"market": "-", "severity": "medium", "text": f"alert classification unavailable ({type(exc).__name__})"}],
+                  "connection": [], "resolved": [], "stop_kill": []}
+    try:
+        activity = dec.recent_activity(cfg, now)
+    except Exception:  # noqa: BLE001
+        activity = []
     return {"generated_at": _iso(now), "read_only": True, "orders_possible": False, "markets": markets,
+            "decisions": decision, "alert_groups": groups, "activity": activity,
+            "warmup_note": "Warm-up signals were generated on history before each forward-test boundary to prime the "
+                           "strategies. They are not evidence, never reach the risk engine and are never traded.",
             "health": {n: {k: h.get(k) for k in ("uptime", "disconnections", "data_gaps", "signals", "decisions",
                                                     "trades", "integrity")} for n, h in health.items()},
             "risk": risk, "alerts": alerts,
@@ -673,8 +691,11 @@ def history(cfg: dict, runner_id: str, kind: str, *, q: str | None = None, strat
                        "status": s["status"], "side": body.get("side"), "entry": _f(body.get("entry_price")),
                        "stop": _f(body.get("stop_price")), "take_profit": _f(body.get("take_profit")),
                        "approved": sum(1 for d in ds if d["approved"]), "rejected": sum(1 for d in ds if not d["approved"]),
-                       "traded": s["signal_id"] in traded}
-                if strategy and row["strategy"] != strategy or status and row["status"] != status:
+                       "traded": s["signal_id"] in traded,
+                       "phase": "warmup" if s["status"] == "warmup" else "forward"}
+                if strategy and row["strategy"] != strategy:
+                    continue
+                if status == "forward" and row["phase"] != "forward" or status not in (None, "", "forward") and row["status"] != status:
                     continue
                 if _in_range(row["at"], start, end) and _match(q, row["signal_id"], row["strategy"], row["side"]):
                     rows.append(row)
@@ -737,25 +758,36 @@ def equity(cfg: dict, runner_id: str, *, strategy: str | None = None) -> dict:
         return {"runner": runner_id, "available": False, "books": []}
     out = []
     with ReadOnlyShadowStore(r["db"]) as store:
+        trades_by_book: dict[str, list] = {}
+        for t in store.trades():
+            trades_by_book.setdefault(t["book_id"], []).append(t)
         for book_id, info in sorted(store.books().items()):
             if strategy and info["strategy_key"] != strategy:
                 continue
-            curve = store.equity_curve(book_id)
             initial = float(info["initial_equity"])
-            points, peak, dd = [], initial, []
-            for at, value in curve:
-                v = float(value)
-                peak = max(peak, v)
-                t = int(parse_time(at).timestamp())
-                points.append({"time": t, "value": v})
-                dd.append({"time": t, "value": round(-100 * (peak - v) / peak, 4) if peak else 0.0})
+            # Realized curve: initial equity + cumulative net P&L of this book's recorded closed trades.
+            realized, cum = [], 0.0
+            for t in sorted(trades_by_book.get(book_id, []), key=lambda x: x["closed_at"]):
+                cum += float(t["pnl"])
+                realized.append({"time": int(parse_time(t["closed_at"]).timestamp()), "value": initial + cum})
+            # Marks: equity recorded at bar closes while a position was open (includes unrealized P&L).
+            marks = [{"time": int(parse_time(at).timestamp()), "value": float(v)} for at, v in store.equity_curve(book_id)]
+            merged = {p["time"]: p["value"] for p in marks}
+            merged.update({p["time"]: p["value"] for p in realized})  # closed-trade values win at equal times
+            points = [{"time": t, "value": v} for t, v in sorted(merged.items())]
+            peak, dd = initial, []
+            for p in points:
+                peak = max(peak, p["value"])
+                dd.append({"time": p["time"], "value": round(-100 * (peak - p["value"]) / peak, 4) if peak else 0.0})
             out.append({"book": book_id, "strategy": info["strategy_key"], "initial_equity": initial,
-                        "commission": float(info["commission"]), "points": len(points),
-                        "equity": _downsample(points), "drawdown_pct": _downsample(dd),
-                        "last": points[-1]["value"] if points else initial,
-                        "max_drawdown_pct": min((p["value"] for p in dd), default=0.0)})
+                        "commission": float(info["commission"]), "points": len(points), "trades": len(realized),
+                        "marks": len(marks), "equity": _downsample(points), "realized": _downsample(realized),
+                        "drawdown_pct": _downsample(dd), "last": points[-1]["value"] if points else initial,
+                        "realized_pnl": cum, "max_drawdown_pct": min((p["value"] for p in dd), default=0.0)})
     return {"runner": runner_id, "available": True, "books": out, "kind": "simulated",
-            "note": "Equity is marked at each bar close while a position is open; flat books have no marks."}
+            "note": ("Each book is one alternative simulation (one equity size x one cost scenario) of the same "
+                     "signals. Books are shown one at a time and never summed. Curve = initial equity + recorded "
+                     "closed-trade P&L, plus equity marks recorded at bar closes while a position was open.")}
 
 
 def signal_detail(cfg: dict, runner_id: str, signal_id: str) -> dict:

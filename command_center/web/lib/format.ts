@@ -77,6 +77,24 @@ export function ageFrom(iso: string | null | undefined, now = Date.now()): numbe
   return Number.isNaN(t) ? null : (now - t) / 1000;
 }
 
+/** Render ISO timestamps embedded in server-written text in the selected zone ("2026-11-09 13:20 UTC"). */
+export function humanize(text: string | null | undefined): string {
+  if (!text) return "";
+  return text.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)/g, (m) => `${fmtShort(m)} ${tzLabel()}`);
+}
+
+/** "in 2 h 05 min" / "5 min ago" relative to now: a countdown to a scheduled window, never a prediction. */
+export function fmtRel(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return dash;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return dash;
+  const s = Math.round((t - now) / 1000);
+  const a = Math.abs(s);
+  const txt = a < 90 ? `${a} s` : a < 5400 ? `${Math.round(a / 60)} min`
+    : a < 172800 ? `${Math.floor(a / 3600)} h ${p2(Math.round((a % 3600) / 60))} min` : `${Math.round(a / 86400)} d`;
+  return s >= 0 ? `in ${txt}` : `${txt} ago`;
+}
+
 export function tone(v: number | null | undefined): string {
   if (v === null || v === undefined || v === 0) return "text-slate-300";
   return v > 0 ? "text-up" : "text-down";

@@ -18,6 +18,7 @@ export const STRATEGY_COLOR: Record<string, string> = {
   h1_ema_cross: "#7dd3fc", ema_trend: "#fbbf24", kronos: "#f472b6",
 };
 const CONTROL_COLOR = "#5b6578";
+const WARMUP_COLOR = "#7c8799";
 
 const t = (s: number) => s as UTCTimestamp;
 
@@ -127,9 +128,12 @@ export default function CandleChart({ data, layers, tfSeconds, selected, onPick,
         if (s.control && !layers.controls) continue;
         if (s.status === "warmup" && !layers.warmup) continue;
         const long = s.side === "long";
-        const color = s.control ? CONTROL_COLOR : STRATEGY_COLOR[s.strategy] ?? "#cbd5e1";
+        const warm = s.status === "warmup";
+        // Warm-up (history before the forward boundary) is drawn grey and labelled; forward signals keep their colour.
+        const color = s.control ? CONTROL_COLOR : warm ? WARMUP_COLOR : STRATEGY_COLOR[s.strategy] ?? "#cbd5e1";
         markers.push({ time: t(s.time), position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown",
-          color, size: s.control ? 0.6 : 1, text: s.control ? "" : `${s.strategy.split("_")[0]}${s.status === "warmup" ? " (w)" : ""}` });
+          color, size: s.control ? 0.6 : warm ? 0.8 : 1.2,
+          text: s.control ? "" : `${s.strategy.split("_")[0]} ${warm ? "warm-up" : "FORWARD"}` });
       }
     }
     if (layers.trades) {

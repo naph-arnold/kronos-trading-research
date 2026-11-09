@@ -15,7 +15,11 @@ import threading
 import time
 from pathlib import Path
 
-from command_center.services import load_config
+# Minimal resources: the calendar library pulls in numpy; one BLAS thread is plenty for a read-only dashboard.
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
+from command_center.services import load_config  # noqa: E402
 
 EXIT_PORT_IN_USE = 3
 EXIT_UNSAFE_BIND = 4
@@ -46,6 +50,17 @@ def _port_free(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         return s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", port)) != 0
+
+
+def _prewarm() -> None:
+    """Build the (cached) holiday calendar in the background so the first Overview request is fast."""
+    try:
+        from datetime import datetime, timezone
+
+        from command_center import decisions, services
+        decisions.xau_calendar(datetime.now(timezone.utc).date(), services.CACHE)
+    except Exception:  # noqa: BLE001 - the request path reports any problem itself
+        pass
 
 
 def main() -> None:
@@ -79,6 +94,7 @@ def main() -> None:
                             access_log=False, server_header=False, date_header=False)
     server = uvicorn.Server(config)
     threading.Thread(target=_watch_stop_file, args=(server, stop_file), daemon=True).start()
+    threading.Thread(target=_prewarm, daemon=True).start()
     pid_file.write_text(f"{os.getpid()} {host} {port}", encoding="utf-8")
     print(f"Kronos Command Center (read-only) on http://{host}:{port} (pid {os.getpid()})", flush=True)
     try:

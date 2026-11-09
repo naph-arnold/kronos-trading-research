@@ -153,13 +153,106 @@ The launcher never starts, stops or modifies a trading runner, a runner task or 
 | Disconnected runners, inaccessible databases | A stale heartbeat shows "heartbeat delayed" (3 min) or "not responding" (5 min); a strategy shows "stopped". An unreadable database shows "data unavailable" for that runner only (test) |
 | XAUUSD spike | Broker data (MetaQuotes-Demo daily-reopen print at 3914.40 on 2–5 Nov, present in ticks and all bar timeframes). Not a chart-processing issue. Flagged as "off-market print"; source data unchanged |
 
-## 8. Not in V1 (future versions)
+## 8. Targeted improvements after review (V1.2, 2026-11-09)
+Everything below is read-only and computed from recorded data or the frozen rules. Nothing predicts a trade.
+
+**Live Decision Status** (Overview, `command_center/decisions.py`). One card per strategy says why it is or is not
+trading right now:
+
+| State | Meaning |
+| --- | --- |
+| Waiting for its session | Before the opening range, after the entry window, market closed, or no setup is possible today (range outside the volatility filter, or today's one signal already generated) |
+| Monitoring | Building today's opening range |
+| Waiting for a valid signal | Entry window open (ORB), or every hourly close (Donchian), with all guards passing |
+| Blocked by a deterministic guard | STOP/KILL/breaker, or a reason in the runner's latest heartbeat (`entry_block_reasons`, `guard`) |
+| Simulated position open, runner not responding, not launched, data unavailable | As named |
+
+Inputs:
+- **Observed:** the runner's latest heartbeat, the control files, recorded signals, and the event schedule in the
+  runner's `calendar.sqlite`. Event blackouts use the risk engine's fixed `DEFAULT_RULES`.
+- **Derived session window:** computed from the pre-registered parameters (08:20 New York, a 30 min range, a
+  180 min entry window) and the calendar the runner itself builds: NY gold hours plus CME gold holidays and early
+  closes from `pandas_market_calendars` 5.5.0, the same pinned versions. The runner additionally intersects it with
+  the broker's sessions, and its heartbeat reports `broker_verified`.
+- **Derived setup:**
+  - The frozen strategy class is replayed on the bars the runner recorded:
+    - ORB: the opening range, its width relative to ATR against the filter, and the long and short trigger levels.
+    - Donchian: the 96-bar channel high the next close must exceed.
+  - The strategy code is identical to the runners' commits: `git diff f224754` / `f129e55` shows no change to these
+    classes.
+  - The replay never records anything.
+
+**Alerts:** they are now split into four groups.
+- **Active now:** control files, breaker trips, daily halts, runner down, connection lost, stale data while the
+  market is open, integrity problems, and calendar refresh or reconciliation failures that have not resolved.
+- **Temporary connection issues:** interruption, error and reconnect counts in the window, with "recovered" when
+  the runner is connected now.
+- **Resolved warnings:** heartbeat gaps that ended, with the runner's own evidence. Also failures followed by a
+  success, housekeeping errors and clock offsets.
+- **Past STOP/KILL events:** 7 days; the file is no longer present.
+
+**Warm-up vs forward:** a `forward` / `warm-up - not evidence` tag appears in:
+- the decision cards and the activity feed;
+- History (a Phase column, plus "forward only" and "warm-up only" filters);
+- the Strategies page (forward counts; warm-up shown as excluded);
+- Charts (warm-up markers are grey and labelled; forward markers are larger and labelled FORWARD);
+- the signal record.
+
+**Overview layout:**
+- Decision status comes first.
+- Then recent activity (forward signals, decisions, simulated trades, runner events) and safety alerts.
+- Then markets, simulated accounts and risk limits.
+
+**Equity and drawdown:**
+- One simulated book at a time. Books are alternative equity and cost simulations of the same signals and are never
+  summed.
+- Curve = initial equity + recorded closed-trade P&L, plus the equity marks recorded while a position was open
+  (step line).
+- Drawdown is derived from that curve.
+- Empty books say so; nothing is drawn.
+
+**Resources:**
+- BLAS is limited to 1 thread.
+- Measured on this machine: 79 MB private memory and 7 threads, compared with 432 MB before that limit.
+- The holiday calendar is built once in a background thread and cached for 6 h.
+- The overview takes about 0.3 s when cached.
+- Refresh intervals are unchanged: Overview 15 s, Strategies 20 s, History 30-60 s. Polling pauses in hidden tabs.
+
+**Price spikes and missing data:** the broker off-market-print flag and the lower-timeframe notes are unchanged.
+Recorded history is never edited.
+
+### 8.1 BTC heartbeat gaps over 3 min (investigation, 2026-11-09)
+The runner's store recorded three gaps:
+
+| Gap (UTC) | Evidence | Cause |
+| --- | --- | --- |
+| 08 Nov 22:59:09 -> 23:03:27 (4.3 min) | The next heartbeat recorded the guard `market data stale (0:03:23.98)`: quotes had not been processed since about 23:00:03. `kronos_forecasts.jsonl` starts at exactly 23:00, the first bar inside the forward window (`bar.close_time >= unseen - 1h`). | **Supported:** the first live Kronos forecast loads the model lazily inside the polling loop (`LiveKronos._get`), and the heartbeat is written by that same loop (`housekeeping` after `poll`). The 00:00-05:00 forecasts caused no gap. |
+| 09 Nov 01:25:37 -> 01:28:54 (3.3 min) | Next heartbeat normal (`ok`, data fresh). No event recorded. The WebSocket thread stayed connected (reconnects unchanged at 3, message count rising). | **Not determined.** |
+| 09 Nov 04:18:49 -> 04:24:38 (5.8 min) | Same as above. | **Not determined.** |
+
+Findings common to all three gaps:
+- The machine was not asleep: the gold runner, whose heartbeat runs on an independent thread, wrote one every minute
+  throughout.
+- No restart was recorded.
+- Possible but unproven cause: a slow Binance REST call in `housekeeping`. Each call can take up to 3 x 20 s timeouts
+  plus back-off, `ClockSync.measure` makes 3 calls, and a call that succeeds after retries leaves no record.
+- Gaps 2 and 3 did not coincide with Windows Defender's hourly health reports (gap 3 started 9 s before one; gap 2
+  did not overlap one).
+
+Recommendation (requires approval; the frozen runner was not modified):
+- move the BTC heartbeat to an independent thread, as was done for XAUUSD in `2436d78`;
+- log slow REST calls;
+- pre-load the Kronos model at start-up.
+
+The dashboard now shows each gap under "Resolved warnings" with the runner's own evidence.
+
+## 9. Not in V1 (future versions)
 - Controls (STOP/KILL buttons, runner start/stop, agent activation). These need a separate authenticated,
   audited design and approval.
 - Remote HTTPS access (design in section 5), multi-user accounts, push alerts (e-mail or Telegram) and SSE
   streaming.
 - Grok reviews appear once activation is authorised.
-- Equity curves become informative after forward trades exist.
+- Equity curves become informative after forward trades exist (per-book view ready).
 - Live 1m/5m candles: the runners record only their own intervals (XAU 15m, BTC 1h; Strategy A M5 once
   launched).
 - Light theme and additional languages. The UI is English, with ISO-style 24 h timestamps and UTC or local time.

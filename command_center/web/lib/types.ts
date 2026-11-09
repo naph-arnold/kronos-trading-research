@@ -65,7 +65,38 @@ export interface Overview {
   markets: Record<string, MarketStatus>; health: Record<string, Health>; risk: Record<string, RiskStatus>;
   alerts: { market: string; text: string }[];
   strategies: StrategyPanel[]; accounts: Account[];
+  decisions: Decision[]; alert_groups: AlertGroups; activity: Activity[]; warmup_note: string;
 }
+
+/* ---- Live decision status (V1.2) ---- */
+export interface DecisionCheck { check: string; status: "ok" | "blocked" | "info"; detail: string; kind: string }
+export interface OrbWindow { date: string; range_from: string; range_to: string; entry_from: string; entry_to: string;
+  shortened_by_closure: boolean | null; tz: string; local_open: string }
+export interface Blackout { event: string; at: string; from: string; to: string; provider: string; category: string;
+  all_day: boolean; active: boolean }
+export interface Decision {
+  id: string; name: string; market: string; strategy_key: string; state: string; state_label?: string;
+  headline: string; explanation?: string; checks: DecisionCheck[]; blocking_reasons?: string[]; generated_at?: string;
+  session?: { kind: string; type: string; phase?: string | null; windows?: OrbWindow[]; rule?: string;
+    market?: { open: boolean; next_change: string | null; next_change_kind?: string } | null;
+    next_evaluation?: string; calendar_source?: string | null; error?: string | null;
+    holidays?: string[]; early_closes?: [string, string][] } | null;
+  setup?: { available: boolean; note?: string; kind?: string; session_day?: string; atr?: number | null;
+    range_low?: number | null; range_high?: number | null; width_atr?: number; min_range_atr?: number; max_range_atr?: number;
+    range_filter_ok?: boolean; long_trigger?: number; short_trigger?: number; signal_today?: boolean;
+    last_bar_close?: string; bars_replayed?: number; lookback?: number; channel_high?: number; last_close?: number;
+    distance?: number; distance_pct?: number } | null;
+  blackouts?: { available: boolean; windows: Blackout[]; calendar_refreshed_at?: string | null } | null;
+  signals?: { forward: { signal_id: string; bar_close: string; status: string } | null; forward_count: number;
+    warmup: { signal_id: string; bar_close: string } | null; warmup_count: number } | null;
+}
+export interface AlertItem { market: string; text: string; at?: string; kind?: string; severity?: string;
+  resolution?: string; evidence?: string | null; status?: string; recovered?: boolean; last_at?: string | null;
+  counts?: Record<string, number> }
+export interface AlertGroups { active: AlertItem[]; connection: AlertItem[]; resolved: AlertItem[]; stop_kill: AlertItem[];
+  window_hours?: number }
+export interface Activity { at: string; runner: string; type: string; text: string; kind: string; signal_id?: string;
+  book?: string; strategy?: string; phase?: string }
 
 export interface Candle { time: number; open: number; high: number; low: number; close: number; volume: number | null; source: string }
 
@@ -113,7 +144,8 @@ export interface HistoryPage<T> { runner: string; label: string; kind: string; a
   offset?: number; rows: T[]; note?: string }
 
 export interface HSignal { at: string; signal_id: string; strategy: string; status: string; side: string;
-  entry: number | null; stop: number | null; take_profit: number | null; approved: number; rejected: number; traded: boolean }
+  entry: number | null; stop: number | null; take_profit: number | null; approved: number; rejected: number; traded: boolean;
+  phase?: string }
 export interface HDecision { at: string; book: string; strategy: string | null; signal_id: string; approved: boolean;
   size: number | null; planned_risk: number | null; reasons: string[]; categories: string[] }
 export interface HTrade { at: string; opened_at: string | null; book: string; strategy: string | null; signal_id: string;
@@ -124,6 +156,7 @@ export interface HTrade { at: string; opened_at: string | null; book: string; st
 export interface HEvent { at: string; event: string; class: string; detail: string }
 
 export interface EquityBook { book: string; strategy: string; initial_equity: number; commission: number; points: number;
+  trades: number; marks: number; realized_pnl: number; realized: { time: number; value: number }[];
   equity: { time: number; value: number }[]; drawdown_pct: { time: number; value: number }[]; last: number; max_drawdown_pct: number }
 export interface EquityData { runner: string; available: boolean; books: EquityBook[]; note?: string }
 
