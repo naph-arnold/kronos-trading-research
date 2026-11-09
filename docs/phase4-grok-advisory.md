@@ -87,19 +87,21 @@ strategies ─> signals ─> trading.risk.evaluate ─> simulated fills     (no 
   running and prepared forward tests.
 
 ## 5. Activation procedure (operator approval required)
-1. Approve paid xAI usage, a daily call budget and a daily USD ceiling.
-2. In a reviewed commit to `research/configs/grok_advisory.json`:
-   - choose the model id (section 7), and set `"activated": true` and `"model"`;
-   - set `pricing_usd_per_million.input` and `.output` from the official price list for that model;
-   - set a positive `daily_usd_budget`.
+1. Approve paid xAI usage. Already prepared (section 8): the model `grok-4.20-0309-non-reasoning`, the list
+   prices ($1.25 / $2.50 per million tokens, verified 2026-11-09) and the $1.00/day ceiling.
+2. Re-verify the prices on docs.x.ai on the day. Then, in a reviewed commit, set `"activated": true` in
+   `research/configs/grok_advisory.json`.
 
-   The `xai` transport refuses to start without the prices and the USD ceiling.
+   The `xai` transport refuses to start without prices and a positive `daily_usd_budget`. It also refuses a
+   budget above the $1.00/day hard ceiling in code.
 3. Store `XAI_API_KEY` outside Git, using a user-scoped environment variable or a secrets store. Set
    `GROK_AGENTS_ACTIVATED=1`.
-4. Run
-   `python -m research.grok_advisory review --runner xau_orb --transport xai --i-have-activation-approval --latest 1`,
-   then inspect `advisory.sqlite`.
-5. Only then schedule periodic reviews. They stay advisory and are recorded separately.
+4. Smoke test on 1–3 decided signals:
+   `python -m research.grok_advisory review --runner xau_orb --db <gold shadow.sqlite> --transport xai --i-have-activation-approval --latest 1`.
+   Then check `status`, `verify-audit` and the recorded `actual_cost_usd`. Confirm that the model accepted
+   `response_format` `json_schema` with `strict` (an HTTP 400 is recorded as `unavailable`, never as advice).
+5. Only then schedule `review-signals`. It is signal-triggered and runs every 15 minutes locally; it calls the API
+   only when a new candidate signal has been decided. Reviews stay advisory and are recorded separately.
 
 ## 6. Phase 4 implementation plan
 | Step | Deliverable | Gate |
@@ -162,3 +164,41 @@ tokens); re-check them at activation. Each cell shows the typical and the worst-
   - Set `daily_usd_budget` to $1.00, a hard ceiling of about $30 per month even if signals cluster.
   - Periodic market briefs (hourly or every 15 minutes) are not needed for advisory evaluation; they would cost
     $45–200 per month and are not recommended.
+
+## 8. Trial readiness (2026-11-09; still not activated, no paid call made)
+**Model availability and price (official docs.x.ai/docs/models, retrieved 2026-11-09).**
+`grok-4.20-0309-non-reasoning` is listed with a 1M context.
+
+| Prompt size | Input | Cached input | Output |
+| --- | --- | --- | --- |
+| < 200k tokens | $1.25 / M | $0.20 / M | $2.50 / M |
+| ≥ 200k tokens | $2.50 / M | — | $5.00 / M |
+
+Our prompts are about 7–9k tokens, so only the < 200k tier applies.
+
+**Structured outputs (docs.x.ai structured-outputs guide).** `response_format`
+`{"type": "json_schema", "json_schema": {..., "strict": true}}` is documented, and `json_object` is also accepted.
+The guide does not list which models support it, so the smoke test confirms it.
+
+| Requirement | Implementation (`research/grok_advisory.py`) |
+| --- | --- |
+| Hard $1/day ceiling | `HARD_DAILY_USD_CEILING = 1.00` in code: activation refuses a higher config value and `run_desk` caps at it. Each call reserves its worst case (prompt + full `max_tokens`) before it is sent. A review starts only if the call budget covers all 6 calls. |
+| Signal-triggered reviews | `review-signals` reviews only forward signals of the **candidate** strategies (`orb_newyork`, `selective_a`, `donchian`) that the deterministic risk engine has **already decided** (`evaluated`). Excluded: warm-up, random controls, pending signals, repeats and signals older than 6 h. At most 3 reviews per run. With no new signal, no API call is made. |
+| Token and cost accounting | Usage reported by the API is stored per call. `actual_cost_usd` is billed tokens × list price, conservatively ignoring the cached-input discount. The budget counts the larger of the reservation and the actual cost. |
+| Strict structured output | A per-role JSON Schema with `additionalProperties: false`, enums, ranges and required fields, sent with `strict: true`. The local validators stay authoritative: evidence ids, timestamps, price range, forbidden keys. |
+| Failed or incomplete → no recommendation | Any of these makes that role unavailable, and the Coordinator falls back to `insufficient_inputs` (no recommendation): `finish_reason` other than `stop` (for example truncated by `max_tokens`), a refusal, empty content, non-JSON, a schema or contract violation, or a missing role. |
+| Independent audit logging | `state/grok_advisory/audit.jsonl` is append-only, fsynced and SHA-256 hash-chained (call / output / summary). It holds hashes, status, cost and usage, never prompts, responses or keys. `verify-audit` checks the chain and cross-checks the store. |
+| No access to parameters, limits or execution | Agents receive bars, the signal's side and time, and decision outcomes. Risk-engine reasons have every number masked (`Spread # exceeds max #`), so no limit, size, equity or parameter reaches a prompt (test). Nothing the agents return reaches a strategy, the risk engine or a venue (guard test). |
+| Credentials | `XAI_API_KEY` is read only from the environment at call time and redacted from errors. It is not in the config (test) and not in the audit log (test). |
+
+**Dry run on the live stores (read-only, 2026-11-09 01:5x UTC).** `review-signals` found no forward candidate
+signals yet, so 0 reviews and 0 calls. The Strategy A store does not exist yet ("runner not started").
+`verify-audit` reported ok. `status`: activated false, key not present.
+
+**Trial readiness: ready for your authorisation.** Remaining steps, in order:
+1. Your spending approval.
+2. Re-check the prices on the day.
+3. Set the key as a user environment variable (never in a file).
+4. A reviewed commit with `"activated": true`.
+5. The smoke test (step 4.3).
+6. Registering a `review-signals` task. This is a Task Scheduler change and needs separate approval.

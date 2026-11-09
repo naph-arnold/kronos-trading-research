@@ -131,3 +131,19 @@ Branch `ops/xau-selective-a-readiness` (stacked on #22). Details are in `docs/PR
   union resolution of `docs/PROGRESS.md` and `.github/workflows/ci.yml`, identical to merge commit `9c17c3f`.
 - Use merge commits, not squash.
 - Do not switch the runner checkouts.
+
+## 9. Update: launch preparation and Grok trial readiness (2026-11-09 02:00 UTC)
+- **Strategy A:** ready for launch approval (`docs/xau-selective-a-shadow.md` section 8). The dedicated checkout
+  is created; backup and runner tasks are prepared, not registered.
+- **Grok:** ready for spending authorisation (`docs/phase4-grok-advisory.md` section 8). Not activated.
+- **Merge plan re-verified.** All 15 PRs are open and mergeable; each head has green CI, or only docs changed
+  since its last green run (#10, #11, #12 add `run_shadow.ps1`, #13, #14). The conflict-free order is unchanged:
+
+  `#9 → #10 → #11 → #12 → #13 → #15 → #16 → #21 → #22 → #23`
+
+  Then retarget #14 and #17–#20 to `master`.
+- **Worktree safety.** Merging moves only refs on GitHub; it does not change local checkouts.
+  - The gold runner runs from `kronos-trading-research` (`ops/dual-runner-reliability`, PR #16 head `f224754`).
+  - The BTC runner runs from `kronos-binance-shadow` (`feat/phase2e-binance-shadow`, PR #14 head `f129e55`).
+  - Do not delete those branches after merging. Do not `git checkout` or `pull` in those folders while their
+    runners are running.

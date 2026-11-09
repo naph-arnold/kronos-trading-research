@@ -132,19 +132,24 @@ is in the session scratchpad and is not repository evidence.
 | 1 | Operator approves launching a third runner | **Pending** |
 | 2 | PR #16 runner code (heartbeat thread, adopt-mode supervisor) is in the deployed checkout. This branch contains it via a merge. | Code ready; deployed with the dedicated checkout (item 9) |
 | 3 | **MT5 multi-client check** | **Passed 2026-11-08 23:15–23:21 UTC** (section 7) |
-| 4 | **Memory headroom:** at least 1.5 GB free with all three runners | Free RAM varies: 0.89 GB at 22:47 and 2.17 GB at 23:07 UTC with two runners. The third runner needs about 170 MB working set and about 500 MB commit. The main consumer is WSL (`vmmemWSL`, about 7.5 GB private). **Re-check at launch.** |
+| 4 | **Memory headroom:** at least 1.5 GB available with all three runners | 2026-11-09 01:45 UTC: 2.3 GB available, commit 34.6 of 41.3 GB, CPU 14% (12 logical CPUs). The third runner needs about 170 MB peak working set and about 500 MB commit. Recovery options are in section 8; none applied. **Re-check at launch.** |
 | 5 | Supervisor task `Kronos Shadow XAUUSD Selective A` (`ops/windows/selective_a_task.ps1`; supervisor `-Name xauselectivea`) | **Prepared; dry run verified; not registered** |
 | 6 | Health report covers the third state directory | **Done** (optional market; takes effect when the gold checkout's report is updated) |
 | 7 | CPI/NFP schedule file covers the test (it runs to 2027-12) | OK |
 | 8 | If not warmed up by 2026-11-13 21:00 UTC, commit the one allowed start-date amendment before the new date | Rule recorded |
-| 9 | Dedicated checkout `C:\Users\Admin\Projects\kronos-selective-a-shadow` (git worktree of the reviewed branch). Never run from the gold or crypto checkouts. | Not created (part of the launch) |
+| 9 | Dedicated checkout `C:\Users\Admin\Projects\kronos-selective-a-shadow` (git worktree, branch `deploy/xau-selective-a`). Never run from the gold or crypto checkouts. | **Created 2026-11-09** (no state directory, nothing running). The config loads with the frozen pre-registration hash `b8574f53…`. The Strategy A, backup and health-report tests pass from this checkout. |
+| 10 | Daily state backup (`research/state_backup.py`; task `Kronos Backup XAUUSD Selective A`, 00:30 local = 21:30 UTC, to `C:\Users\Admin\KronosBackups\xau_selective_a_shadow`, 14 sets kept) | **Prepared; dry run verified; not registered** (registered by `-Apply` together with the runner task) |
 
 **Launch procedure (after approval only):**
-1. `git worktree add C:\Users\Admin\Projects\kronos-selective-a-shadow <reviewed commit>`
-2. In a reviewed commit, set `"launch_approved": true` in `research/configs/xau_selective_a_shadow.json`. The
-   pre-registration and parameters are unchanged; `load_config` refuses any drift.
+1. The dedicated worktree exists (branch `deploy/xau-selective-a`). Bring it to the reviewed commit with
+   `git -C C:\Users\Admin\Projects\kronos-selective-a-shadow merge --ff-only <reviewed commit>`.
+2. In a reviewed commit on that branch, set `"launch_approved": true` in
+   `research/configs/xau_selective_a_shadow.json`. The pre-registration and parameters are unchanged;
+   `load_config` refuses any drift.
 3. Run `ops\windows\selective_a_task.ps1` as a dry run and confirm "Pre-launch checks met".
-4. Run `ops\windows\selective_a_task.ps1 -Apply`. This registers the task; the supervisor starts the runner.
+4. Run `ops\windows\selective_a_task.ps1 -Apply`. This registers the runner task and the daily backup task; the
+   supervisor starts the runner. `-Apply` refuses to overwrite an existing task, because re-registering a task
+   ends its running instance.
 5. Watch the first heartbeats, the `warmup_loaded` event and the health report. Warm-up takes about 2 minutes.
 
 A manual one-off alternative to steps 2–4 is `python -m research.xau_selective_a_shadow run --i-have-launch-approval`.
@@ -190,3 +195,57 @@ the 23:30 bar close.
 - about 20 MB of disk per year.
 
 For comparison, the running Phase 2D runner holds 425 MB of commit.
+
+## 8. Launch preparation assessment (2026-11-09)
+**Verdict: ready for launch approval.** Every technical item is met or prepared. Two operator decisions remain:
+approve the launch (item 1) and confirm memory headroom on the day (item 4).
+
+**Resources (measured 2026-11-09 01:45 UTC, two runners running):**
+
+| Measure | Value |
+| --- | --- |
+| Physical memory | 15.35 GB total; 2.3 GB available (1.7 GB of it standby cache); 55 page-ins/s |
+| Commit | 34.6 of 41.3 GB, so 6.7 GB of headroom against the third runner's ~0.5 GB |
+| CPU | 14% average over 12 logical CPUs. The third runner uses one core for ~2 min at warm-up, then near idle. |
+| Disk C: | 178 GB free; the third runner writes ~20 MB per year plus backups (14 × ~5–20 MB) |
+| Largest users (working set / private) | Chrome 3.9 / 8.4 GB (52 processes); WSL `vmmemWSL` 1.5 / 7.5 GB; ChatGPT apps 1.8 / 3.7 GB; Claude Code 0.7 / 1.6 GB; the two runners 0.16 / 1.1 GB together |
+
+**What WSL is holding.** `vmmemWSL` is the Docker Desktop VM (the only distribution is `docker-desktop`; there
+is no `.wslconfig`). It runs two local Supabase stacks of the Settleward projects, 22 containers that have been
+up for 2 days and use about 3.6 GB inside the VM. Of the 7.5 GB it has committed, only about 1.5 GB is resident;
+Windows has already paged out or compressed the rest. Within it:
+- each stack's `logflare` analytics container uses about 0.66 GB, and one was at about 75% of a CPU core;
+- both `supabase_vector` containers are in a restart loop.
+
+**Safe recovery options (none applied; all need your decision):**
+1. **Close unused Chrome tabs and windows, and one of the two ChatGPT apps.** This is the largest resident
+   saving, roughly 1–3 GB, with no effect on research.
+2. **Stop the Supabase stack you are not using** (`supabase stop` in that project). This frees about 1.8 GB inside
+   the VM, which WSL then returns gradually.
+3. **Disable the analytics and vector services in the stacks you keep** (`[analytics] enabled = false` in that
+   project's `supabase/config.toml`, then restart that stack). This saves about 1.3 GB and stops the restart loop
+   and the CPU burn.
+4. **Cap WSL and let it return its page cache.** Create `%UserProfile%\.wslconfig` with `[wsl2] memory=6GB` and
+   automatic memory reclaim (`autoMemoryReclaim=gradual`; check the setting's section for WSL 3.0.3 in
+   Microsoft's WSL configuration documentation). This takes effect only after `wsl --shutdown`, which stops
+   every container, so schedule it when the Settleward work allows.
+5. **Optional:** the `MySQL92` service (about 0.6 GB private, automatic start). Set it to manual if it is not
+   used.
+
+None of these touch the runners or MT5.
+
+**Recommendation.** Before launch, do 1, and 2 or 3. That gives a comfortable margin of about 3–5 GB available.
+Option 4 is the durable fix, but it needs a container restart window. With nothing done, the launch is still
+feasible: the third runner adds about 0.17 GB resident, and commit headroom is ample. Paging pressure would
+rise, though, and that already correlates with occasional heartbeat stalls of up to about 3 minutes on the BTC
+runner (a hypothesis, not established).
+
+**Controls verified** (tests on synthetic data, run from the dedicated checkout):
+
+| Control | How it is enforced |
+| --- | --- |
+| KILL | Rejects new entries |
+| STOP | Prevents a start, and the supervisor never restarts while it exists |
+| Duplicate instance | `StateLock` refuses a second process on the same state; the supervisor mutex and running-runner scan add two more layers |
+| Restart recovery | Bars, books, signals and decisions are restored with 0 mismatches, also on live MT5 data in the preflight (section 7) |
+| Backup | Consistent online copy through a read-only connection, integrity check, digest manifest, retention, tamper detection |

@@ -531,6 +531,56 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Strategy A launch preparation and Grok trial readiness (2026-11-09)
+Branch `ops/xau-selective-a-readiness` (PR #23). Status: **Verified** (tests and dry runs). Strategy A **not
+launched**, no task registered. Grok **not activated**, no paid call made.
+
+### Running systems (read-only, not restarted or modified)
+- **XAUUSD NY ORB, 12 h to 01:41 UTC:**
+  - uptime 100%, 721 heartbeats, no gap > 2 min since 23:00;
+  - calendar `broker_verified`; all 4 calendar providers refreshed ok at 01:30;
+  - MT5 account check every 10 min: 3,000 USD, 0 positions, 0 orders, unchanged;
+  - 28 books flat; reconciliation ok hourly; 0 decisions and 0 trades (no NY session yet since the boundary).
+- **BTC/USDT Donchian:**
+  - 1h forward bars recorded; 18 books flat; 0 decisions and 0 trades; pre-registration consistent;
+  - three main-loop heartbeat gaps of 172–196 s (00:37, 00:57, 01:25 UTC). They are not linked to websocket
+    reconnects (count unchanged at 3) and stay under the alert threshold except one at 196 s.
+- **Gold runner termination investigated** (`docs/operations-windows.md` section 1b). The 13:18 UTC kill
+  coincides with Office Click-to-Run Restart Manager sessions (13:17:49–13:19:17). The three later silent
+  supervisor-only exits remain undetermined.
+
+### Added
+- **`research/grok_advisory.py`:**
+  - strict per-role JSON Schema structured outputs;
+  - truncated, refused or empty responses fail;
+  - hard $1.00/day ceiling in code;
+  - `actual_cost_usd` per call;
+  - hash-chained `audit.jsonl` with `verify-audit`;
+  - signal-triggered `review-signals` (candidate strategies, decided signals only, no repeats);
+  - numbers masked in risk reasons.
+- **`research/configs/grok_advisory.json`:**
+  - model `grok-4.20-0309-non-reasoning`;
+  - prices $1.25 / $2.50 per M tokens (docs.x.ai, 2026-11-09);
+  - `daily_usd_budget` 1.0;
+  - trigger config and candidate strategies;
+  - `activated: false`.
+- **`research/state_backup.py`** and tests: online read-only SQLite backup, integrity check, manifest,
+  retention, verification.
+- **`ops/windows/selective_a_task.ps1`:** prepared daily backup task; `-Apply` refuses to overwrite an existing
+  task.
+- **Dedicated Strategy A checkout** `C:\Users\Admin\Projects\kronos-selective-a-shadow` (worktree, branch
+  `deploy/xau-selective-a`). No state directory; nothing running.
+
+### Tests
+- Full suite: 580 passed, 8 deselected; ruff clean on the CI scope.
+- From the dedicated checkout: 28 passed (Strategy A, backup, health report).
+
+### Next action (operator)
+- **Strategy A launch approval**, plus memory steps from `docs/xau-selective-a-shadow.md` section 8.
+- **Grok spending authorisation.**
+- **Optional diagnostics:** Task Scheduler operational log and the Office update window.
+- **Merges** in the planned order.
+
 ## Milestone: Strategy A readiness and Grok verification (2026-11-08/09)
 Branch `ops/xau-selective-a-readiness` (stacked on PR #22). Status: **Verified** (preflight and tests); Strategy A
 **not launched**; Grok **not activated**.
