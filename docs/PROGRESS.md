@@ -532,6 +532,42 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: scalp v2 research, execution economics, trial preflight, BTC reliability (2026-11-09)
+Status: **Verified**. No orders, no runner restarted, no task registered, nothing merged.
+
+**BTC reliability** (PR #27, branch `ops/btc-runner-reliability`; not deployed):
+- Changes: an independent heartbeat thread (with loop age and step), Kronos start-up preload, and slow-step
+  diagnostics.
+- Tests: 29/29, including 5 new ones.
+- The live checkout is still `f129e55`. Restart procedure in the PR.
+- A diagnostic resource sampler (scratch, read-only) records memory and CPU every 15 s, so future gaps can be
+  correlated.
+
+**Strategy A:** restart-ready; the start-at-logon registration is prepared and safe while running (doc §11). Not
+registered.
+
+**Scalp v2:**
+- Pre-registered first, at `c766013`.
+- H1, H2 and H3 were all rejected at the development gate. H2 at 4 ATR was +0.12 R on 2025–26 but −0.115 R on
+  2019–20.
+- Docs: [xau-scalp-v2-research.md](xau-scalp-v2-research.md).
+
+**Execution economics:**
+- Verified specification; round trip 33–40 USD per lot; cost in R falls steeply with wider stops.
+- Limit orders show adverse selection, which cancels the spread saving.
+- Docs: [mt5-execution-economics.md](mt5-execution-economics.md).
+
+**Trial preflight:** read-only. The risk engine approves the 0.01-lot mechanics order (0.41% risk). Blockers:
+- Algo Trading is off;
+- no approval file.
+
+**Dashboard:** the broker balance and equity curve comes from 172 observed checks, and the shadow view gains an
+open-positions table with entry, stop and target.
+
+**Tests:** `tests/test_scalp_v2.py` (7). Full suite: see the PR.
+
+---
+
 ## Milestone: MT5 demo execution adapter, account performance dashboard, scalping status (2026-11-09)
 Branch `feat/mt5-demo-execution-account-dashboard`, stacked on PR #25. Status: **Verified**, with no order
 submitted.

@@ -290,3 +290,19 @@ operating-system changes.
 - A 178 s gap had already occurred at 05:35, before the launch.
 - No restart, no error event, status ok afterwards. See command-center.md section 8.1 for the existing BTC gap
   analysis.
+
+## 11. Restart readiness and start-at-logon registration (prepared 2026-11-09; NOT registered)
+**Current state:**
+- The supervisor (pid 828) and runner run as plain processes, with no scheduled task. They stop at reboot or logoff.
+
+**Restart readiness:**
+- Warm-up and restore were measured live: 126 s and 168 s (13k M5 bars), with 0 signal mismatches (§7).
+- The verified initial-state backup exists, `backup_20261109T055756Z`.
+- STOP/KILL and duplicate prevention are tested (21/21).
+
+**Registration:** `ops\windows\selective_a_task.ps1 -Apply` (needs your approval).
+- It registers `Kronos Shadow XAUUSD Selective A` (at logon plus every 15 min) and the daily backup task.
+- The dry run reports "Pre-launch checks met".
+- **Registering while the supervisor runs is safe.** A task-started supervisor finds the
+  `Local\Kronos.Shadow.xauselectivea` mutex held and exits immediately. The task only takes effect after a reboot
+  or logoff, when it starts a supervisor that adopts or starts the runner.

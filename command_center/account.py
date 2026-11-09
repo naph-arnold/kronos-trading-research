@@ -45,6 +45,7 @@ def broker_view(cfg: dict, now: datetime) -> dict:
     db = Path(acfg.get("mt5_state_dir", "")) / "account.sqlite"
     runner_checks = _runner_account_checks(cfg)
     out["runner_checks"] = runner_checks
+    out["series"] = balance_equity_series(cfg, Path(acfg.get("mt5_state_dir", "")) / "account.sqlite")
     if not db.exists():
         out["note"] = ("The read-only account monitor has not recorded a snapshot. Balance and equity below come only "
                        "from the runners' periodic read-only account checks.") if runner_checks else \
@@ -98,6 +99,38 @@ def _balance_check(acct: dict, cf: dict, perf: dict) -> dict:
     actual = _dec(acct.get("balance"))
     return {"expected_from_deals": float(expected), "reported_balance": float(actual),
             "difference": float(actual - expected), "ok": abs(actual - expected) < Decimal("0.01")}
+
+
+def balance_equity_series(cfg: dict, acct_db: Path | None, max_points: int = 600) -> dict:
+    """Observed broker balance and equity over time: the gold runner's periodic read-only account checks plus the
+    account monitor's snapshots. Nothing is interpolated; gaps stay gaps."""
+    pts: dict[int, tuple[float, float, str]] = {}
+    db = Path(cfg["markets"]["xauusd"]["state_dir"]) / "shadow.sqlite"
+    if db.exists():
+        con = connect_ro(db)
+        try:
+            for at, detail in con.execute("SELECT at, detail FROM events WHERE kind IN ('mt5_account_check', "
+                                          "'mt5_account_baseline') ORDER BY id"):
+                d = json.loads(detail)
+                if d.get("balance") is not None and d.get("equity") is not None:
+                    pts[int(_t(at).timestamp())] = (float(d["balance"]), float(d["equity"]), "runner check")
+        finally:
+            con.close()
+    if acct_db is not None and acct_db.exists():
+        con = connect_ro(acct_db)
+        try:
+            for at, a in con.execute("SELECT at, account FROM snapshots WHERE connected=1 ORDER BY at"):
+                d = json.loads(a)
+                pts[int(_t(at).timestamp())] = (float(d["balance"]), float(d["equity"]), "account monitor")
+        finally:
+            con.close()
+    items = sorted(pts.items())
+    if len(items) > max_points:
+        step = len(items) / max_points
+        items = [items[int(i * step)] for i in range(max_points - 1)] + [items[-1]]
+    return {"points": len(pts), "balance": [{"time": t, "value": v[0]} for t, v in items],
+            "equity": [{"time": t, "value": v[1]} for t, v in items],
+            "source": "observed: runners' read-only account checks + account monitor snapshots"}
 
 
 def _runner_account_checks(cfg: dict) -> list[dict]:
