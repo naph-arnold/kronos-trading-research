@@ -18,7 +18,9 @@ import argparse
 import hashlib
 import json
 import logging
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -47,6 +49,7 @@ from trading.strategies.crypto import (BtcRandomEntry, DonchianBreakout, Donchia
 
 MARKET = Market.BTCUSDT_BINANCE_SPOT
 H1 = timedelta(hours=1)
+SLOW_STEP_S = 10.0  # a loop step taking longer is recorded as a `slow_step` event (diagnostics only)
 log = logging.getLogger("research.phase2e_binance_shadow")
 CANDIDATE_CLASSES = {"donchian": (DonchianBreakout, DonchianParams), "ema_trend": (TrendFollowing, TrendParams),
                      "vwap_reversion": (VwapMeanReversion, VwapReversionParams),
@@ -209,6 +212,10 @@ class LiveKronos:
             self._predictor = KronosPredictor(model, tokenizer, device="cpu", max_context=512)
         return self._predictor
 
+    def preload(self) -> None:
+        """Load the model at start-up so the first live forecast never blocks the polling loop mid-run."""
+        self._get()
+
     def forecast(self, history: list[Bar]) -> float:
         """Forecast the close of the bar after history[-1] from the last `lookback` closed bars only."""
         import pandas as pd
@@ -237,6 +244,28 @@ class LiveKronos:
 
 # --------------------------------------------------------------------------- runner
 
+class HeartbeatThread(threading.Thread):
+    """Writes heartbeats independently of the polling loop, so a slow request or model load can no longer
+    silence them; each beat reports how long the loop has been busy and in which step."""
+
+    def __init__(self, runner: "Runner", interval: float):
+        super().__init__(daemon=True, name="btc-heartbeat")
+        self.runner, self.interval = runner, interval
+        self._halt = threading.Event()
+
+    def run(self) -> None:
+        while True:
+            try:
+                self.runner.heartbeat()
+            except Exception as exc:  # noqa: BLE001 - never let the heartbeat thread die
+                log.warning("heartbeat failed: %s", type(exc).__name__)
+            if self._halt.wait(self.interval):
+                return
+
+    def stop(self) -> None:
+        self._halt.set()
+
+
 @dataclass
 class Runner:
     config: dict
@@ -249,6 +278,7 @@ class Runner:
     engine: ShadowEngine | None = None
     _last: dict = field(default_factory=dict)
     _buffer: list = field(default_factory=list)
+    slow_step_s: float = SLOW_STEP_S
 
     def __post_init__(self):
         self.state_dir = Path(self.state_dir)
@@ -260,6 +290,51 @@ class Runner:
         self.runner_cfg = self.config["runner"]
         self.kronos = self.kronos or LiveKronos(self.state_dir / "kronos_forecasts.jsonl")
         self.data_status = {"quotes": "not started", "klines": "not started"}
+        self._beat_lock = threading.Lock()
+        self._hb_thread: HeartbeatThread | None = None
+        self._phase, self._phase_mono, self._loop_mono = "starting", time.monotonic(), time.monotonic()
+
+    @contextmanager
+    def _step(self, name: str):
+        """Time one loop step; record it if it is slow (diagnostics for heartbeat gaps)."""
+        previous, started = self._phase, time.monotonic()
+        self._phase, self._phase_mono = name, started
+        try:
+            yield
+        finally:
+            seconds = time.monotonic() - started
+            self._phase, self._phase_mono = previous, time.monotonic()
+            if seconds >= self.slow_step_s:
+                try:
+                    self.store.event(self.clock(), "slow_step", step=name, seconds=round(seconds, 2))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def heartbeat(self, now: datetime | None = None) -> None:
+        """Status from recorded state only. Safe from the heartbeat thread (store writes are locked)."""
+        with self._beat_lock:
+            now = now or self.clock()
+            loop_age = time.monotonic() - self._loop_mono
+            guard = None
+            if self.engine is None:
+                status = "starting"
+            else:
+                try:
+                    guard = self.engine._guard()(now)
+                except Exception as exc:  # noqa: BLE001 - concurrent update; report, never crash
+                    guard = f"guard error: {exc}"
+                status = "ok" if guard is None else "entries_blocked"
+            if self._hb_thread is not None and loop_age > max(180.0, 30 * self.runner_cfg["poll_seconds"]):
+                status = "loop_stalled"
+            self.store.heartbeat(now, status=status, guard=guard, data=dict(self.data_status),
+                                 stream=self.feed.stream.status(now),
+                                 last_bar_close=str(self.engine.last_bar_close if self.engine else None),
+                                 breaker=self.breaker.reasons(),
+                                 open_positions=len(self.engine.positions) if self.engine else 0,
+                                 loop_age_s=round(loop_age, 1), loop_step=self._phase,
+                                 step_age_s=round(time.monotonic() - self._phase_mono, 1),
+                                 heartbeat_source="thread" if self._hb_thread is not None else "loop")
+            self._last["heartbeat"] = now
 
     def start(self) -> dict:
         environment = load_demo_environment()
@@ -365,7 +440,8 @@ class Runner:
             history.append(bar)
             if bar.close_time >= unseen - H1 and "kronos" in self.config["candidates"]:
                 try:
-                    self.kronos.forecast(history)
+                    with self._step("kronos_forecast"):
+                        self.kronos.forecast(history)
                 except Exception as exc:  # Kronos unavailable: that candidate simply has no signal
                     self.store.event(now, "kronos_unavailable", bar=bar.open_time.isoformat(),
                                      error=f"{type(exc).__name__}: {str(exc)[:120]}")
@@ -378,17 +454,20 @@ class Runner:
         due = (engine.last_bar_close or now) + H1 + timedelta(seconds=self.runner_cfg["kline_settle_s"])
         if now >= due:
             try:
-                bars = self.feed.closed_bars(engine.last_bar_close, floor_hour(now))
+                with self._step("klines"):
+                    bars = self.feed.closed_bars(engine.last_bar_close, floor_hour(now))
                 self.data_status["klines"] = "ok"
             except Exception as exc:  # noqa: BLE001 - recorded; stale-kline guard rejects entries meanwhile
                 self.data_status["klines"] = f"unavailable: {type(exc).__name__}"
                 self.store.event(now, "data_interruption", source="klines", error=f"{type(exc).__name__}: {exc}")
-        quotes, source = self.feed.quotes(stale_after=self.runner_cfg["ws_stale_s"])
+        with self._step("quotes"):
+            quotes, source = self.feed.quotes(stale_after=self.runner_cfg["ws_stale_s"])
         if source != self.data_status["quotes"]:
             self.store.event(now, "quote_source", source=source)
             self.data_status["quotes"] = source
         self._buffer.extend(quotes)
-        counts = self._ingest(bars, self._buffer, now)
+        with self._step("ingest"):
+            counts = self._ingest(bars, self._buffer, now)
         floor = engine.last_tick.time if engine.last_tick else None
         self._buffer = [q for q in self._buffer if floor is None or q.time > floor][-self.runner_cfg["max_buffer"]:]
         return counts
@@ -396,36 +475,32 @@ class Runner:
     def housekeeping(self) -> None:
         now = self.clock()
         cfg, epoch = self.runner_cfg, datetime.min.replace(tzinfo=timezone.utc)
-        if now - self._last.get("heartbeat", epoch) >= timedelta(seconds=cfg["heartbeat_seconds"]):
-            guard = None
-            try:
-                guard = self.engine._guard()(now)
-            except Exception as exc:  # noqa: BLE001
-                guard = f"guard error: {exc}"
-            self.store.heartbeat(now, status="ok" if guard is None else "entries_blocked", guard=guard,
-                                 data=dict(self.data_status), stream=self.feed.stream.status(now),
-                                 last_bar_close=str(self.engine.last_bar_close), breaker=self.breaker.reasons(),
-                                 open_positions=len(self.engine.positions))
-            self._last["heartbeat"] = now
+        if self._hb_thread is None and now - self._last.get("heartbeat", epoch) >= timedelta(
+                seconds=cfg["heartbeat_seconds"]):
+            self.heartbeat(now)
         if now - self._last.get("exchange_status", epoch) >= timedelta(minutes=cfg["exchange_status_minutes"]):
             try:
-                info = self.feed.exchange_info()
+                with self._step("exchange_info"):
+                    info = self.feed.exchange_info()
                 self.engine.health.record_binance_status(info.get("status", "unknown"), now)
             except Exception as exc:  # noqa: BLE001 - status goes stale -> entries rejected
                 self.store.event(now, "data_interruption", source="exchangeInfo", error=type(exc).__name__)
             self._last["exchange_status"] = now
         if now - self._last.get("clock", epoch) >= timedelta(minutes=cfg["clock_sync_minutes"]):
             try:
-                offset = self.feed.clock.measure()
+                with self._step("clock_sync"):
+                    offset = self.feed.clock.measure()
                 if abs(offset.total_seconds()) > cfg["max_clock_offset_s"]:
                     self.store.event(now, "clock_offset", offset_s=offset.total_seconds())
             except Exception as exc:  # noqa: BLE001
                 self.store.event(now, "data_interruption", source="server_time", error=type(exc).__name__)
             self._last["clock"] = now
         if now - self._last.get("calendar", now) >= timedelta(hours=self.config["calendar"]["refresh_hours"]):
-            self._calendar(now)
+            with self._step("calendar_refresh"):
+                self._calendar(now)
         if now - self._last.get("spec", now) >= timedelta(hours=cfg["spec_refresh_hours"]):
-            instruments, _ = self._specification(now)
+            with self._step("specification"):
+                instruments, _ = self._specification(now)
             self.engine.instruments, self.engine.spec_retrieved_at = instruments, now
         if now - self._last.get("reconcile", epoch) >= timedelta(hours=1):
             self.store.event(now, "reconciliation", **self.engine.reconcile())
@@ -437,10 +512,27 @@ class Runner:
     def run(self, *, once: bool = False, max_minutes: float | None = None,
             sleep: Callable[[float], None] = time.sleep) -> dict:
         started = self.clock()
-        result = self.start()
+        self._hb_thread = HeartbeatThread(self, float(self.runner_cfg["heartbeat_seconds"]))
+        self._hb_thread.start()
+        try:
+            with self._step("start"):
+                result = self.start()
+            if "kronos" in self.config["candidates"]:
+                t0 = time.monotonic()
+                try:
+                    with self._step("kronos_model_load"):
+                        self.kronos.preload()
+                    self.store.event(self.clock(), "kronos_model_loaded", seconds=round(time.monotonic() - t0, 2))
+                except Exception as exc:  # noqa: BLE001 - the forecast path records unavailability itself
+                    self.store.event(self.clock(), "kronos_unavailable", stage="preload",
+                                     error=f"{type(exc).__name__}: {str(exc)[:120]}")
+        except BaseException:
+            self._hb_thread.stop()
+            raise
         failures = 0
         try:
             while True:
+                self._loop_mono = time.monotonic()
                 if (self.state_dir / "STOP").exists():
                     self.store.event(self.clock(), "stop_file")
                     break
@@ -460,6 +552,7 @@ class Runner:
                     break
                 sleep(self.runner_cfg["poll_seconds"])
         finally:
+            self._hb_thread.stop()
             self.feed.stop()
         return {"last_poll": result, "status": self.engine.status()}
 

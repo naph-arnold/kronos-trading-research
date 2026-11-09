@@ -590,3 +590,89 @@ def test_btc_config_drift_is_refused(tmp_path):
     drift["random_controls"]["donchian"]["seeds"] = [1, 2, 3]
     with pytest.raises(ValidationError):
         check_preregistration(drift, prereg)
+
+
+# --------------------------------------------------------------------------- reliability: heartbeat thread, preload
+
+def _reliability_runner(tmp_path, monkeypatch, *, heartbeat_s=0.05):
+    from phase2_helpers import random_walk
+    from research.phase2e_binance_shadow import LiveKronos, Runner
+    monkeypatch.setenv("EXECUTION_MODE", "demo")
+    config, prereg = _btc_config(tmp_path)
+    config["runner"]["heartbeat_seconds"] = heartbeat_s
+    bars = random_walk("BTCUSDT", "1h", T0, 60, price=76000.0, vol=0.004, seed=9)
+    now = [T0 + 40 * H1 + timedelta(seconds=10)]
+    feed = FakeFeed(bars, now)
+    state = tmp_path / "state"
+    runner = Runner(config, prereg, feed, state, calendar_service=_calendar_service(tmp_path),
+                    kronos=LiveKronos(state / "kronos.jsonl", lookback=16, predictor=StubKronos()))
+    return runner, feed, now
+
+
+def test_heartbeats_continue_while_the_loop_is_blocked(tmp_path, monkeypatch):
+    import time as _time
+    from research.phase2e_binance_shadow import HeartbeatThread
+    runner, feed, now = _reliability_runner(tmp_path, monkeypatch)
+    runner.start()
+    before = len(runner.store.heartbeats())
+    original = feed.closed_bars
+
+    def slow_klines(start, end):  # a stuck REST call / model load inside the polling loop
+        _time.sleep(0.6)
+        return original(start, end)
+    feed.closed_bars = slow_klines
+    runner.slow_step_s = 0.3
+    writes = []
+    real = runner.store.heartbeat
+    runner.store.heartbeat = lambda at, **d: (writes.append(d), real(at, **d))  # fake clock is frozen: count writes
+    runner._hb_thread = HeartbeatThread(runner, 0.05)
+    runner._hb_thread.start()
+    now[0] += H1  # a kline fetch is due
+    runner.poll()
+    runner._hb_thread.stop()
+    runner._hb_thread.join(2)
+    assert before >= 0 and len(writes) >= 6  # the old design wrote none while poll() was blocked
+    assert any(w["loop_step"] == "klines" and w["heartbeat_source"] == "thread" for w in writes)
+    slow = [e for e in runner.store.events() if e["kind"] == "slow_step"]
+    assert slow and slow[0]["step"] == "klines" and slow[0]["seconds"] >= 0.6
+
+
+def test_stalled_loop_is_reported_not_silent(tmp_path, monkeypatch):
+    import time as _time
+    from research.phase2e_binance_shadow import HeartbeatThread
+    runner, _, _ = _reliability_runner(tmp_path, monkeypatch)
+    runner.start()
+    runner._hb_thread = HeartbeatThread(runner, 60)  # not started; marks thread mode
+    runner._loop_mono = _time.monotonic() - 600
+    runner.heartbeat()
+    assert runner.store.heartbeats()[-1][1]["status"] == "loop_stalled"
+
+
+def test_run_starts_heartbeats_before_warmup_and_preloads_the_model(tmp_path, monkeypatch):
+    runner, _, _ = _reliability_runner(tmp_path, monkeypatch)
+    loaded = []
+    runner.kronos.preload = lambda: loaded.append(True)
+    runner.run(once=True, sleep=lambda s: None)
+    kinds = [e["kind"] for e in runner.store.events()]
+    assert loaded == [True] and "kronos_model_loaded" in kinds
+    assert kinds.index("kronos_model_loaded") > kinds.index("start")
+    assert runner._hb_thread is not None and not runner._hb_thread.is_alive() or runner._hb_thread._halt.is_set()
+    beats = runner.store.heartbeats()
+    assert beats and beats[0][1]["heartbeat_source"] == "thread"
+
+
+def test_model_preload_failure_is_recorded_not_fatal(tmp_path, monkeypatch):
+    runner, _, _ = _reliability_runner(tmp_path, monkeypatch)
+
+    def boom():
+        raise RuntimeError("no weights")
+    runner.kronos.preload = boom
+    runner.run(once=True, sleep=lambda s: None)
+    ev = [e for e in runner.store.events() if e["kind"] == "kronos_unavailable"]
+    assert ev and ev[0]["stage"] == "preload"
+
+
+def test_reliability_patch_leaves_frozen_config_and_strategies_unchanged():
+    import subprocess
+    diff = subprocess.run(["git", "diff", "f129e55", "--name-only"], capture_output=True, text=True, cwd=ROOT).stdout.split()
+    assert all(not f.startswith(("research/configs/", "research/forward_test/", "trading/")) for f in diff), diff
