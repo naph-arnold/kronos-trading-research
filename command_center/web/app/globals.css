@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #07090d;
+  color: #d7dde8;
+}
+
+body {
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+@layer components {
+  .panel {
+    @apply min-w-0 rounded-2xl border border-line/90 bg-gradient-to-b from-ink-900/95 to-ink-950/95 shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_10px_30px_-12px_rgba(0,0,0,0.6)] transition-colors;
+  }
+  .panel:hover {
+    @apply border-ink-600/80;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-ink-850/80 transition hover:-translate-y-px hover:border-ink-600 hover:shadow-[0_8px_24px_-12px_rgba(79,156,249,0.35)];
+  }
+  .input {
+    @apply rounded-lg border border-line bg-ink-900 px-2.5 py-1.5 text-[12.5px] text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-info/60 focus:ring-2 focus:ring-info/20;
+  }
+  .skeleton {
+    @apply animate-pulse rounded-md bg-ink-800/80;
+  }
+  .tbl tbody tr {
+    @apply transition-colors;
+  }
+  .tbl tbody tr:hover {
+    @apply bg-ink-800/60;
+  }
+  .panel-h {
+    @apply flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-line px-4 py-2.5;
+  }
+  .panel-t {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-mute;
+  }
+  .kv {
+    @apply flex items-baseline justify-between gap-3 py-1 text-sm;
+  }
+  .kv dt {
+    @apply text-mute;
+  }
+  .kv dd {
+    @apply min-w-0 break-words text-right font-mono tabular-nums text-slate-200;
+  }
+  .num {
+    @apply font-mono tabular-nums;
+  }
+  .tbl {
+    @apply w-full text-left text-[12.5px];
+  }
+  .tbl th {
+    @apply sticky top-0 bg-ink-900 px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-mute;
+  }
+  .tbl td {
+    @apply border-t border-line/70 px-3 py-1.5 align-top;
+  }
+  .btn {
+    @apply rounded-lg border border-line bg-ink-800/80 px-2.5 py-1 text-xs text-slate-300 transition hover:border-ink-600 hover:bg-ink-700 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/40 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-on {
+    @apply border-info/60 bg-info/15 text-info shadow-[0_0_0_1px_rgba(79,156,249,0.15)];
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #232c3a;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

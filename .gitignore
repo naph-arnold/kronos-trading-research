@@ -85,3 +85,12 @@ state/
 
 # Local power-plan backup written by ops/windows/power_settings.ps1 -Apply
 ops/windows/power_settings_backup.json
+
+# Command Center (dashboard) local artifacts
+.venv-cc/
+command_center/web/node_modules/
+command_center/web/.next/
+command_center/web/out/
+command_center/web/next-env.d.ts
+command_center/web/tsconfig.tsbuildinfo
+!command_center/web/lib/

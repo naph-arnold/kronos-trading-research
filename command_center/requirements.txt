@@ -1,0 +1,10 @@
+# Command Center backend only (installed in its own venv, never in the runners' .venv311).
+fastapi==0.115.6
+uvicorn==0.32.1
+# Session windows: the same CME gold holiday calendar (and versions) the runners use.
+pandas==2.2.2
+numpy==1.26.4
+exchange_calendars==4.13.2
+pandas_market_calendars==5.5.0
+# tests (TestClient)
+httpx==0.28.1

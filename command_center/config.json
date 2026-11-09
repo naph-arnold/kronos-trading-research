@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "purpose": "Kronos Trading Command Center V1 (read-only). Paths to the running runners' state and to recorded market history. Nothing here is written to.",
+  "bind": {"host": "127.0.0.1", "port": 8765},
+  "security": {
+    "allowed_hosts": ["127.0.0.1", "localhost"],
+    "token_env": "KRONOS_CC_TOKEN",
+    "note": "Local-only. A VPS deployment keeps the app on 127.0.0.1 behind an HTTPS reverse proxy that authenticates users; add the public host name to allowed_hosts and set KRONOS_CC_TOKEN (the proxy injects it as a Bearer header)."
+  },
+  "health_window_hours": 24,
+  "markets": {
+    "xauusd": {
+      "label": "XAUUSD",
+      "venue": "MetaTrader 5 demo (MetaQuotes-Demo), read-only",
+      "state_dir": "C:/Users/Admin/Projects/kronos-trading-research/state/phase2d_shadow",
+      "repo": "C:/Users/Admin/Projects/kronos-trading-research",
+      "config": "research/configs/phase2d_shadow_xauusd.json",
+      "store_interval": "15m",
+      "volume_label": "tick volume",
+      "history": {
+        "1m": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/mt5_xauusd_1m.csv",
+        "5m": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/mt5_xauusd_5m.csv",
+        "15m": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/mt5_xauusd_15m.csv",
+        "1h": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/mt5_xauusd_1h.csv"
+      }
+    },
+    "btcusdt": {
+      "label": "BTC/USDT",
+      "venue": "Binance Spot public market data, read-only",
+      "state_dir": "C:/Users/Admin/Projects/kronos-binance-shadow/state/phase2e_binance_shadow",
+      "repo": "C:/Users/Admin/Projects/kronos-binance-shadow",
+      "config": "research/configs/phase2e_binance_shadow.json",
+      "store_interval": "1h",
+      "volume_label": "BTC volume",
+      "history": {
+        "1m": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/binance_btcusdt_1m_2023-01_2026-11.csv",
+        "5m": "C:/Users/Admin/Projects/kronos-mtf-research/data/raw/binance_btcusdt_5m_2019-01_2026-11.csv",
+        "1h": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/binance_btcusdt_1h_2023-11_2026-11.csv"
+      }
+    }
+  },
+  "strategies": [
+    {"id": "xau_orb", "name": "XAUUSD New York Opening Range Breakout", "market": "xauusd", "runner": "xauusd",
+     "strategy_key": "orb_newyork", "controls": ["random_s1", "random_s2", "random_s3", "random_s4", "random_s5"],
+     "task": "Kronos Shadow XAUUSD"},
+    {"id": "btc_donchian", "name": "BTC/USDT Donchian Breakout", "market": "btcusdt", "runner": "btcusdt",
+     "strategy_key": "donchian", "controls": ["random_donchian_s1", "random_donchian_s2", "random_donchian_s3"],
+     "task": "Kronos Shadow BTCUSDT"},
+    {"id": "xau_selective_a", "name": "XAUUSD Selective Strategy A", "market": "xauusd", "runner": "xauusd_selective_a",
+     "strategy_key": "selective_a", "controls": ["random"], "task": "Kronos Shadow XAUUSD Selective A",
+     "state_dir": "C:/Users/Admin/Projects/kronos-selective-a-shadow/state/xau_selective_a_shadow",
+     "repo": "C:/Users/Admin/Projects/kronos-selective-a-shadow",
+     "config": "research/configs/xau_selective_a_shadow.json", "store_interval": "5m"}
+  ],
+  "grok": {
+    "config": "C:/Users/Admin/Projects/kronos-command-center/research/configs/grok_advisory.json",
+    "advisory_dirs": ["C:/Users/Admin/Projects/kronos-trading-research/state/grok_advisory",
+                      "C:/Users/Admin/Projects/kronos-command-center/state/grok_advisory"]
+  }
+}
