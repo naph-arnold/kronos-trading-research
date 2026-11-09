@@ -9,7 +9,11 @@ import { Empty, ErrorNote, KindTag, Loading, Panel, Stat, StateBadge } from "@/c
 
 function MarketCard({ m, h }: { m: MarketStatus; h?: Health }) {
   if (!m.available) {
-    return <Panel title={m.label}><Empty>Runner not started. No observations recorded.</Empty></Panel>;
+    return (
+      <Panel title={m.label} right={<StateBadge state="blocked" label={m.runner ?? "unavailable"} />}>
+        <Empty>{m.runner === "not started" ? "Runner not started. No observations recorded." : "The runner's database could not be read just now (locked, missing or damaged). Nothing is inferred; the dashboard retries automatically."}</Empty>
+      </Panel>
+    );
   }
   const q = m.last_quote;
   const mid = q ? (q.bid + q.ask) / 2 : null;
@@ -64,6 +68,7 @@ function MarketCard({ m, h }: { m: MarketStatus; h?: Health }) {
 
 function RiskCard({ name, r }: { name: string; r: RiskStatus }) {
   const L = r.limits;
+  if (!L) return <div className="rounded-lg border border-line bg-ink-850 p-3 text-xs text-mute">{name === "xauusd" ? "XAUUSD" : "BTC/USDT"}: risk state unavailable.</div>;
   return (
     <div className="rounded-lg border border-line bg-ink-850 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -86,7 +91,7 @@ function RiskCard({ name, r }: { name: string; r: RiskStatus }) {
 function StrategySummary({ s }: { s: StrategyPanel }) {
   const m = s.metrics;
   return (
-    <Link href={`/strategies/#${s.id}`} className="block rounded-lg border border-line bg-ink-850 p-3 transition hover:border-ink-600">
+    <Link href={`/strategies/#${s.id}`} className="card block p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="text-[13px] font-semibold leading-snug text-slate-100">{s.name}</div>
         <StateBadge state={s.lifecycle} />
@@ -139,16 +144,16 @@ function AccountsTable({ accounts }: { accounts: Account[] }) {
 export default function OverviewPage() {
   const { data, error, loading, updatedAt } = usePoll<Overview>("/api/overview", 15000);
   if (loading && !data) return <Loading />;
-  if (!data) return <ErrorNote error={error} />;
+  if (!data) return <ErrorNote error={error} updatedAt={updatedAt} />;
   const markets = Object.values(data.markets);
   const disconnections = Object.entries(data.health).flatMap(([mk, h]) =>
     Object.entries(h.disconnections ?? {}).map(([k, v]) => ({ mk, k, v })));
   const gaps = Object.entries(data.health).flatMap(([mk, h]) => (h.uptime?.gaps_over_3_min ?? []).map((g) => ({ mk, ...g })));
   return (
     <div className="space-y-4">
-      <ErrorNote error={error} />
+      <ErrorNote error={error} updatedAt={updatedAt} />
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold text-slate-100">Overview</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-50">Overview</h1>
         <div className="flex items-center gap-3 text-[11px] text-mute">
           <span className="flex items-center gap-1"><KindTag kind="observed" /> venue data</span>
           <span className="flex items-center gap-1"><KindTag kind="simulated" /> shadow books</span>

@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ColorType, CrosshairMode, LineStyle, createChart,
   type IChartApi, type ISeriesApi, type SeriesMarker, type Time, type UTCTimestamp,
 } from "lightweight-charts";
 import type { ChartData, ChartSignal } from "@/lib/types";
+import { fmtNum, fmtTime, getTzMode } from "@/lib/format";
 
 export interface Layers {
   volume: boolean; ema: boolean; signals: boolean; controls: boolean; warmup: boolean;
@@ -20,10 +21,24 @@ const CONTROL_COLOR = "#5b6578";
 
 const t = (s: number) => s as UTCTimestamp;
 
-export default function CandleChart({ data, layers, tfSeconds, selected, onPick, focusTime }: {
+function tick(time: number, tickType: number): string {
+  const d = new Date(time * 1000);
+  const utc = getTzMode() === "utc";
+  const p = (n: number) => String(n).padStart(2, "0");
+  const H = utc ? d.getUTCHours() : d.getHours(), M = utc ? d.getUTCMinutes() : d.getMinutes();
+  const day = utc ? d.getUTCDate() : d.getDate(), mon = (utc ? d.getUTCMonth() : d.getMonth()) + 1;
+  if (tickType <= 2) return `${utc ? d.getUTCFullYear() : d.getFullYear()}-${p(mon)}-${p(day)}`; // year/month/day marks
+  return `${p(H)}:${p(M)}`;
+}
+
+interface Hover { time: number; open: number; high: number; low: number; close: number; volume: number | null }
+
+export default function CandleChart({ data, layers, tfSeconds, selected, onPick, focusTime, height = 560 }: {
   data: ChartData; layers: Layers; tfSeconds: number; selected: ChartSignal | null;
-  onPick: (time: number) => void; focusTime: number | null;
+  onPick: (time: number) => void; focusTime: number | null; height?: number;
 }) {
+  const [hover, setHover] = useState<Hover | null>(null);
+  const byTime = useRef(new Map<number, Hover>());
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const series = useRef<ISeriesApi<"Candlestick" | "Line" | "Histogram">[]>([]);
@@ -40,10 +55,12 @@ export default function CandleChart({ data, layers, tfSeconds, selected, onPick,
       grid: { vertLines: { color: "#141a24" }, horzLines: { color: "#141a24" } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#232c3a" },
-      timeScale: { borderColor: "#232c3a", timeVisible: true, secondsVisible: false, rightOffset: 6 },
-      localization: { locale: "en-US" },
+      timeScale: { borderColor: "#232c3a", timeVisible: true, secondsVisible: false, rightOffset: 6,
+        tickMarkFormatter: (time: Time, type: number) => tick(Number(time), type) },
+      localization: { locale: "en-US", timeFormatter: (t: number) => fmtTime(t).slice(0, 16) },
     });
     c.subscribeClick((p) => { if (p.time !== undefined) pickRef.current(Number(p.time)); });
+    c.subscribeCrosshairMove((p) => setHover(p.time !== undefined ? byTime.current.get(Number(p.time)) ?? null : null));
     chart.current = c;
     return () => { c.remove(); chart.current = null; series.current = []; candles.current = null; };
   }, []);
@@ -54,6 +71,7 @@ export default function CandleChart({ data, layers, tfSeconds, selected, onPick,
     for (const s of series.current) c.removeSeries(s);
     series.current = [];
     candles.current = null;
+    byTime.current = new Map(data.candles.map((k) => [k.time, k]));
     if (!data.candles.length) return;
     const last = data.candles[data.candles.length - 1].time;
     const cs = c.addCandlestickSeries({
@@ -126,6 +144,9 @@ export default function CandleChart({ data, layers, tfSeconds, selected, onPick,
         markers.push({ time: t(p.time), position: p.kind === "high" ? "aboveBar" : "belowBar", shape: "circle", color: "#64748b", size: 0.3, text: p.label });
       }
     }
+    for (const o of data.outliers ?? []) {
+      markers.push({ time: t(o.time), position: "belowBar", shape: "circle", color: "#f5a524", size: 0.6, text: "off-market print" });
+    }
     markers.sort((a, b) => Number(a.time) - Number(b.time));
     cs.setMarkers(markers);
 
@@ -148,5 +169,23 @@ export default function CandleChart({ data, layers, tfSeconds, selected, onPick,
     }
   }, [focusTime, data, tfSeconds]);
 
-  return <div ref={box} className="h-[560px] w-full" />;
+  const last = data.candles[data.candles.length - 1];
+  const h = hover ?? (last ? { ...last } : null);
+  const up = h ? h.close >= h.open : true;
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <div ref={box} className="absolute inset-0" />
+      {h && (
+        <div className="pointer-events-none absolute left-3 top-2 z-10 flex flex-wrap gap-x-3 gap-y-0.5 rounded-md bg-ink-950/70 px-2 py-1 font-mono text-[11px] backdrop-blur">
+          <span className="text-mute">{fmtTime(h.time).slice(0, 16)}</span>
+          <span>O <span className={up ? "text-up" : "text-down"}>{fmtNum(h.open)}</span></span>
+          <span>H <span className={up ? "text-up" : "text-down"}>{fmtNum(h.high)}</span></span>
+          <span>L <span className={up ? "text-up" : "text-down"}>{fmtNum(h.low)}</span></span>
+          <span>C <span className={up ? "text-up" : "text-down"}>{fmtNum(h.close)}</span></span>
+          {h.volume !== null && <span className="text-mute">V {fmtNum(h.volume, 0)}</span>}
+          {!hover && <span className="text-mute">(last)</span>}
+        </div>
+      )}
+    </div>
+  );
 }

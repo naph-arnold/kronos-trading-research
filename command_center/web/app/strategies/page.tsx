@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePoll } from "@/lib/api";
 import { dash, fmtMoney, fmtNum, fmtPct, fmtSigned, fmtTime, tone } from "@/lib/format";
 import type { StrategyPanel } from "@/lib/types";
@@ -18,7 +19,8 @@ function StrategyCard({ s }: { s: StrategyPanel }) {
         <StateBadge state={s.lifecycle} />
       </header>
       <div className="space-y-4 p-4">
-        <p className={`rounded-lg px-3 py-2 text-[12.5px] ${prepared ? "border border-info/30 bg-info/10 text-info" : "bg-ink-850 text-slate-300"}`}>{s.lifecycle_detail}</p>
+        <p className={`rounded-lg px-3 py-2 text-[12.5px] ${prepared ? "border border-info/30 bg-info/10 text-info" : s.lifecycle === "unavailable" ? "border border-down/30 bg-down/10 text-down" : "bg-ink-850 text-slate-300"}`}>{s.lifecycle_detail}</p>
+        {s.lifecycle !== "prepared" && <Link href={`/history/`} className="inline-flex items-center gap-1 text-[12px] text-info hover:underline">Search this strategy&apos;s signals, decisions and trades →</Link>}
         {prepared ? (
           <div className="space-y-3">
             <Empty>No signals, trades or performance: the runner has not been launched, so nothing has been recorded.</Empty>
@@ -94,13 +96,13 @@ function StrategyCard({ s }: { s: StrategyPanel }) {
 }
 
 export default function StrategiesPage() {
-  const { data, error, loading } = usePoll<StrategyPanel[]>("/api/strategies", 20000);
+  const { data, error, loading, updatedAt } = usePoll<StrategyPanel[]>("/api/strategies", 20000);
   if (loading && !data) return <Loading />;
   return (
     <div className="space-y-4">
-      <ErrorNote error={error} />
+      <ErrorNote error={error} updatedAt={updatedAt} />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-lg font-semibold text-slate-100">Strategy monitoring</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-50">Strategy monitoring</h1>
         <p className="text-[11.5px] text-mute">All figures are shadow simulations under the frozen pre-registered rules. Net figures include estimated spread, slippage, commission and swap.</p>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">

@@ -120,6 +120,22 @@ providers (official/licensed, attributed)        market-specific rules          
   and risk engine cannot receive them, and live Grok calls are not activated.
   Details: [mtf-hybrid-research.md](mtf-hybrid-research.md).
 
+## Trading Command Center (Phase 5, monitoring only)
+- **Shape:** a separate, read-only process (`command_center/`). It has its own venv, worktree and port, and is
+  started by `Kronos Command Center.cmd`.
+  - The FastAPI backend serves a static Next.js build; no Node process runs in production.
+  - It reads the runners' SQLite stores with `mode=ro` + `query_only`, and recorded CSV history.
+  - It reuses the existing reporting code (`market_health`, `book_metrics`, ORB session definition, Grok audit
+    verifier).
+- **No control path:** the API is GET-only. The dashboard cannot place orders, change runners, create STOP/KILL
+  files, edit data or activate agents. Python remains the engine; the runners neither import nor depend on it.
+- **Exposure and hygiene:**
+  - It binds to `127.0.0.1` and refuses a non-loopback bind unless a token is configured.
+  - Host allow-list (DNS rebinding), CSP and frame-deny headers.
+  - Responses are scrubbed of filesystem paths and carry no credentials.
+- **Remote access (future, not deployed):** the app stays on `127.0.0.1` behind an authenticating HTTPS reverse
+  proxy. See `docs/command-center.md` section 5.
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -42,16 +43,30 @@ def _iso(t: datetime | None) -> str | None:
 class _Cache:
     """Tiny TTL cache so polling clients cannot make the dashboard rescan stores more than every few seconds."""
 
-    def __init__(self):
+    def __init__(self, max_items: int = 64):
         self._items: dict = {}
+        self.max_items = max_items
 
     def get(self, key, ttl: float, fn):
         hit = self._items.get(key)
         if hit and time.monotonic() - hit[0] < ttl:
             return hit[1]
         value = fn()
+        if len(self._items) >= self.max_items:  # bounded memory: drop the oldest entries
+            for old in sorted(self._items, key=lambda k: self._items[k][0])[: self.max_items // 4]:
+                self._items.pop(old, None)
         self._items[key] = (time.monotonic(), value)
         return value
+
+
+# Errors that mean "this runner's data cannot be read right now" (locked, missing, corrupt, half-written).
+DATA_ERRORS = (sqlite3.Error, OSError, ValueError, KeyError, TypeError)
+
+
+def unavailable(kind: str, exc: Exception) -> dict:
+    """A runner whose store cannot be read is reported as unavailable, never as healthy or empty."""
+    return {"available": False, "runner": "data unavailable", "lifecycle": "unavailable",
+            "error": f"{kind}: {type(exc).__name__}", "metrics": None}
 
 
 CACHE = _Cache()
@@ -299,10 +314,27 @@ def overview(cfg: dict) -> dict:
     hours = float(cfg.get("health_window_hours", 24))
     markets, health, risk = {}, {}, {}
     for name, m in cfg["markets"].items():
-        markets[name] = market_status(name, m, now=now)
-        health[name] = market_health(name, Path(m["state_dir"]), Path(m["repo"]), m["config"], now=now, hours=hours)
-        risk[name] = risk_status(cfg, name, m, now)
-    strategies = [strategy_panel(cfg, s, now=now) for s in cfg["strategies"]]
+        try:
+            markets[name] = market_status(name, m, now=now)
+        except DATA_ERRORS as exc:
+            markets[name] = {"market": name, "label": m["label"], "venue": m["venue"], **unavailable("store", exc)}
+        try:
+            health[name] = market_health(name, Path(m["state_dir"]), Path(m["repo"]), m["config"], now=now,
+                                         hours=hours)
+        except DATA_ERRORS as exc:
+            health[name] = {"alerts": [f"health data unavailable ({type(exc).__name__})"]}
+        try:
+            risk[name] = risk_status(cfg, name, m, now)
+        except DATA_ERRORS as exc:
+            risk[name] = {"state": "unknown", "error": type(exc).__name__}
+    strategies = []
+    for s in cfg["strategies"]:
+        try:
+            strategies.append(strategy_panel(cfg, s, now=now))
+        except DATA_ERRORS as exc:
+            strategies.append({"id": s["id"], "name": s["name"], "market": s["market"],
+                               "strategy_key": s["strategy_key"], **unavailable("store", exc),
+                               "lifecycle_detail": "The runner's database could not be read; nothing is inferred."})
     accounts = []
     for name, h in health.items():
         for book_id, b in sorted((h.get("books") or {}).items()):
@@ -365,8 +397,25 @@ def _opening_range(signal: dict, seconds: int) -> dict | None:
         return None
 
 
+def _outlier_wicks(candles: list[dict]) -> list[dict]:
+    """Derived data-quality note: candles whose wick is > 10x the median range of the displayed candles while the
+    body is ordinary (an isolated off-market print). They are flagged, never removed or edited."""
+    ranges = sorted(c["high"] - c["low"] for c in candles)
+    if len(ranges) < 20:
+        return []
+    median = ranges[len(ranges) // 2] or 1e-9
+    out = []
+    for c in candles:
+        body_lo, body_hi = min(c["open"], c["close"]), max(c["open"], c["close"])
+        wick = max(body_lo - c["low"], c["high"] - body_hi)
+        if wick > 10 * median and (body_hi - body_lo) < 3 * median:
+            out.append({"time": c["time"], "low": c["low"], "high": c["high"], "wick": round(wick, 2),
+                        "median_range": round(median, 2)})
+    return out
+
+
 def chart(cfg: dict, market_name: str, tf: str, *, limit: int = 500, until: str | None = None,
-          strategies: list[str] | None = None) -> dict:
+          strategies: list[str] | None = None, include_controls: bool = True, include_warmup: bool = True) -> dict:
     market = cfg["markets"][market_name]
     seconds = tf_seconds(tf)
     data = load_candles(market, tf, limit=limit, until=None if until is None else parse_time(until))
@@ -380,14 +429,15 @@ def chart(cfg: dict, market_name: str, tf: str, *, limit: int = 500, until: str 
         trend = "up" if e20[-1]["value"] > e50[-1]["value"] else "down"
         data["indicators"]["trend"] = trend
     data["structure"] = _structure(candles)
+    data["outliers"] = _outlier_wicks(candles)
+    if data["outliers"]:
+        data["notes"].append(f"{len(data['outliers'])} candle(s) with an isolated wick over 10x the median range "
+                             "(off-market print in the broker's recorded data). Shown exactly as recorded.")
     data["signals"], data["trades"], data["positions"], data["opening_ranges"] = [], [], [], []
     if not candles:
         return data
     t0, t1 = candles[0]["time"], candles[-1]["time"] + seconds
-    keys = {s["strategy_key"]: s for s in cfg["strategies"] if s["market"] == market_name}
-    for s in cfg["strategies"]:
-        if s["market"] == market_name:
-            keys.update({c: {**s, "control": True} for c in s.get("controls", [])})
+    candidates = {s["strategy_key"] for s in cfg["strategies"] if s["market"] == market_name}
     stores = {Path(market["state_dir"]) / "shadow.sqlite"}
     stores |= {Path(s["state_dir"]) / "shadow.sqlite" for s in cfg["strategies"]
                if s["market"] == market_name and s.get("state_dir")}
@@ -403,6 +453,9 @@ def chart(cfg: dict, market_name: str, tf: str, *, limit: int = 500, until: str 
             for s in store.signals():
                 if strategies and s["strategy_key"] not in strategies:
                     continue
+                is_control = s["strategy_key"] not in candidates  # baselines and random controls
+                if (is_control and not include_controls) or (s["status"] == "warmup" and not include_warmup):
+                    continue
                 close = parse_time(s["bar_close"])
                 marker_t = int(floor_time(close - timedelta(seconds=1), seconds).timestamp())
                 if not t0 <= marker_t < t1:
@@ -411,7 +464,7 @@ def chart(cfg: dict, market_name: str, tf: str, *, limit: int = 500, until: str 
                 ds = decisions.get(s["signal_id"], [])
                 data["signals"].append({
                     "time": marker_t, "bar_close": s["bar_close"], "signal_id": s["signal_id"],
-                    "strategy": s["strategy_key"], "control": bool(keys.get(s["strategy_key"], {}).get("control")),
+                    "strategy": s["strategy_key"], "control": is_control,
                     "status": s["status"], "side": body.get("side"), "entry": _f(body.get("entry_price")),
                     "stop": _f(body.get("stop_price")), "take_profit": _f(body.get("take_profit")),
                     "decisions": {"approved": sum(1 for d in ds if d["approved"]),
@@ -539,6 +592,8 @@ def grok_room(cfg: dict) -> dict:
             audit = {"ok": False, "problems": [f"{type(exc).__name__}: {exc}"]}
         room["stores"].append({"dir": d, "calls_by_transport": calls, "usd_today": cost, "summaries": summaries,
                                "outputs": outputs, "audit": audit})
+    for i, store in enumerate(room["stores"]):  # never expose filesystem paths
+        store["dir"] = f"advisory store {i + 1}"
     room["status"] = ("active" if room["activated"] and room["env_activation_flag"] and room["xai_key_present"]
                       else "not activated")
     return room
@@ -546,3 +601,250 @@ def grok_room(cfg: dict) -> dict:
 
 def timeframes() -> list[str]:
     return list(TIMEFRAMES)
+
+
+# --------------------------------------------------------------------------- history and analytics (section 7)
+
+INTERRUPTION_EVENTS = {"data_interruption", "mt5_error", "start_failed", "reconnect", "quote_source", "clock_offset",
+                       "kline_gap", "bar_without_ticks", "kronos_unavailable", "warmup_partial"}
+ALERT_EVENTS = {"calendar_refresh_failed", "kill_file", "stop_file", "housekeeping_error"}
+
+
+def runners(cfg: dict) -> dict:
+    """Every recorded store the dashboard can read, keyed by a public id (no paths leave the server)."""
+    out = {}
+    for name, m in cfg["markets"].items():
+        out[name] = {"label": m["label"], "market": name, "db": Path(m["state_dir"]) / "shadow.sqlite",
+                     "interval": m.get("store_interval")}
+    for s in cfg["strategies"]:
+        if s.get("state_dir"):
+            out[s["id"]] = {"label": s["name"], "market": s["market"], "db": Path(s["state_dir"]) / "shadow.sqlite",
+                            "interval": s.get("store_interval")}
+    return out
+
+
+def _match(q: str | None, *fields) -> bool:
+    if not q:
+        return True
+    q = q.lower()
+    return any(q in str(f).lower() for f in fields if f is not None)
+
+
+def _in_range(at: str | None, start: str | None, end: str | None) -> bool:
+    if at is None:
+        return start is None and end is None
+    return (start is None or at >= start) and (end is None or at <= end)
+
+
+def _event_class(kind: str, detail: dict) -> str:
+    if kind in INTERRUPTION_EVENTS:
+        return "interruption"
+    if kind in ALERT_EVENTS or (kind == "reconciliation" and not detail.get("ok", True)):
+        return "alert"
+    return "routine"
+
+
+def history(cfg: dict, runner_id: str, kind: str, *, q: str | None = None, strategy: str | None = None,
+            status: str | None = None, start: str | None = None, end: str | None = None, limit: int = 200,
+            offset: int = 0) -> dict:
+    """Searchable, paginated history of one runner's recorded signals, risk decisions, simulated trades or events.
+    Newest first. Read-only."""
+    from trading.shadow.report import reason_key
+
+    r = runners(cfg).get(runner_id)
+    if r is None:
+        raise KeyError(runner_id)
+    base = {"runner": runner_id, "label": r["label"], "kind": kind, "rows": [], "total": 0}
+    if not r["db"].exists():
+        return {**base, "available": False, "note": "Runner not started: nothing recorded."}
+    rows: list[dict] = []
+    with ReadOnlyShadowStore(r["db"]) as store:
+        books = store.books()
+        key_of = {b: i["strategy_key"] for b, i in books.items()}
+        if kind == "signals":
+            decisions: dict[str, list] = {}
+            for d in store.decisions():
+                decisions.setdefault(d["signal_id"], []).append(d)
+            traded = {t["signal_id"] for t in store.trades()}
+            for s in store.signals():
+                body = s["body"]
+                ds = decisions.get(s["signal_id"], [])
+                row = {"at": s["bar_close"], "signal_id": s["signal_id"], "strategy": s["strategy_key"],
+                       "status": s["status"], "side": body.get("side"), "entry": _f(body.get("entry_price")),
+                       "stop": _f(body.get("stop_price")), "take_profit": _f(body.get("take_profit")),
+                       "approved": sum(1 for d in ds if d["approved"]), "rejected": sum(1 for d in ds if not d["approved"]),
+                       "traded": s["signal_id"] in traded}
+                if strategy and row["strategy"] != strategy or status and row["status"] != status:
+                    continue
+                if _in_range(row["at"], start, end) and _match(q, row["signal_id"], row["strategy"], row["side"]):
+                    rows.append(row)
+        elif kind == "decisions":
+            for d in store.decisions():
+                row = {"at": d["evaluated_at"], "book": d["book_id"], "strategy": key_of.get(d["book_id"]),
+                       "signal_id": d["signal_id"], "approved": d["approved"], "size": _f(d["size"]),
+                       "planned_risk": _f(d["planned_risk"]), "reasons": d["reasons"],
+                       "categories": sorted({reason_key(x) for x in d["reasons"]})}
+                if strategy and row["strategy"] != strategy:
+                    continue
+                if status and status != ("approved" if d["approved"] else "rejected"):
+                    continue
+                if _in_range(row["at"], start, end) and _match(q, row["signal_id"], row["book"], *row["reasons"]):
+                    rows.append(row)
+        elif kind == "trades":
+            for t in store.trades():
+                costs = {k: _f(t.get(k)) for k in ("spread_slippage_cost", "commission", "swap")}
+                row = {"at": t["closed_at"], "opened_at": t.get("opened_at"), "book": t["book_id"],
+                       "strategy": key_of.get(t["book_id"]), "signal_id": t["signal_id"], "side": t.get("side"),
+                       "size": _f(t.get("size")), "entry": _f(t.get("entry")), "exit": _f(t.get("exit")),
+                       "stop": _f(t.get("stop")), "take_profit": _f(t.get("take_profit")),
+                       "gross_pnl": _f(t.get("gross_pnl")), "costs": costs, "pnl": _f(t.get("pnl")),
+                       "r": _f(t.get("r_multiple")), "mfe_r": _f(t.get("mfe_r")), "mae_r": _f(t.get("mae_r")),
+                       "exit_reason": t.get("exit_reason"), "planned_risk": _f(t.get("planned_risk")),
+                       "loss_beyond_planned": _f(t.get("loss_beyond_planned"))}
+                if strategy and row["strategy"] != strategy or status and row["exit_reason"] != status:
+                    continue
+                if _in_range(row["at"], start, end) and _match(q, row["signal_id"], row["book"], row["exit_reason"]):
+                    rows.append(row)
+        elif kind == "events":
+            for e in store.events():
+                detail = {k: v for k, v in e.items() if k not in ("at", "kind")}
+                row = {"at": e["at"], "event": e["kind"], "class": _event_class(e["kind"], detail),
+                       "detail": json.dumps(detail, default=str)[:400]}
+                if status and row["class"] != status:
+                    continue
+                if _in_range(row["at"], start, end) and _match(q, row["event"], row["detail"]):
+                    rows.append(row)
+        else:
+            raise ValueError(f"unknown history kind {kind!r}")
+    rows.sort(key=lambda x: x["at"] or "", reverse=True)
+    return {**base, "available": True, "total": len(rows), "offset": offset, "rows": rows[offset:offset + limit]}
+
+
+def _downsample(points: list, max_points: int = 600) -> list:
+    if len(points) <= max_points:
+        return points
+    step = len(points) / max_points
+    picked = [points[int(i * step)] for i in range(max_points)]
+    return picked[:-1] + [points[-1]]
+
+
+def equity(cfg: dict, runner_id: str, *, strategy: str | None = None) -> dict:
+    """Simulated equity and drawdown (derived) per book of a runner, downsampled for display."""
+    r = runners(cfg).get(runner_id)
+    if r is None:
+        raise KeyError(runner_id)
+    if not r["db"].exists():
+        return {"runner": runner_id, "available": False, "books": []}
+    out = []
+    with ReadOnlyShadowStore(r["db"]) as store:
+        for book_id, info in sorted(store.books().items()):
+            if strategy and info["strategy_key"] != strategy:
+                continue
+            curve = store.equity_curve(book_id)
+            initial = float(info["initial_equity"])
+            points, peak, dd = [], initial, []
+            for at, value in curve:
+                v = float(value)
+                peak = max(peak, v)
+                t = int(parse_time(at).timestamp())
+                points.append({"time": t, "value": v})
+                dd.append({"time": t, "value": round(-100 * (peak - v) / peak, 4) if peak else 0.0})
+            out.append({"book": book_id, "strategy": info["strategy_key"], "initial_equity": initial,
+                        "commission": float(info["commission"]), "points": len(points),
+                        "equity": _downsample(points), "drawdown_pct": _downsample(dd),
+                        "last": points[-1]["value"] if points else initial,
+                        "max_drawdown_pct": min((p["value"] for p in dd), default=0.0)})
+    return {"runner": runner_id, "available": True, "books": out, "kind": "simulated",
+            "note": "Equity is marked at each bar close while a position is open; flat books have no marks."}
+
+
+def signal_detail(cfg: dict, runner_id: str, signal_id: str) -> dict:
+    """Everything recorded about one signal: market context, provenance, every book's risk decision, simulated
+    executions with costs, the chart around it, and any Grok advisory review of it."""
+    from trading.shadow.report import reason_key
+
+    r = runners(cfg).get(runner_id)
+    if r is None or not r["db"].exists():
+        raise KeyError(runner_id)
+    with ReadOnlyShadowStore(r["db"]) as store:
+        sig = next((s for s in store.signals() if s["signal_id"] == signal_id), None)
+        if sig is None:
+            raise KeyError(signal_id)
+        books = store.books()
+        decisions = [d for d in store.decisions() if d["signal_id"] == signal_id]
+        trades = [t for t in store.trades() if t["signal_id"] == signal_id]
+        positions = {b: p for b, p in store.positions().items() if p.get("signal_id") == signal_id}
+    body = sig["body"]
+    prov = body.get("provenance") or {}
+    interval = prov.get("interval") or r["interval"] or "15m"
+    if interval not in TIMEFRAMES:
+        interval = r["interval"] or "15m"
+    seconds = tf_seconds(interval)
+    close = parse_time(sig["bar_close"])
+    until = (close + timedelta(seconds=seconds * 60)).isoformat()
+    market = cfg["markets"][r["market"]]
+    data = chart(cfg, r["market"], interval, limit=180, until=until, strategies=[sig["strategy_key"]])
+    if r["db"] != Path(market["state_dir"]) / "shadow.sqlite":  # Strategy A: overlays live in its own store
+        data["notes"].append("Overlays come from the strategy's own runner store.")
+    reviews = []
+    subject_suffix = f":{signal_id}"
+    for room_store in grok_room(cfg)["stores"]:
+        reviews += [s for s in room_store["summaries"] if s["subject"].endswith(subject_suffix)]
+    return {
+        "runner": runner_id, "label": r["label"], "signal_id": signal_id, "strategy": sig["strategy_key"],
+        "status": sig["status"], "bar_close": sig["bar_close"], "side": body.get("side"),
+        "entry": _f(body.get("entry_price")), "stop": _f(body.get("stop_price")),
+        "take_profit": _f(body.get("take_profit")), "generated_at": body.get("generated_at"),
+        "strategy_version": body.get("strategy_version"), "interval": interval,
+        "context": prov.get("context"), "params_hash": prov.get("params_hash"), "dataset_id": prov.get("dataset_id"),
+        "decisions": [{"book": d["book_id"], "approved": d["approved"], "at": d["evaluated_at"], "size": _f(d["size"]),
+                       "planned_risk": _f(d["planned_risk"]), "reasons": d["reasons"],
+                       "categories": sorted({reason_key(x) for x in d["reasons"]}),
+                       "equity_at_decision": _f((d.get("context") or {}).get("equity")),
+                       "initial_equity": float(books[d["book_id"]]["initial_equity"]) if d["book_id"] in books else None}
+                      for d in decisions],
+        "trades": [{"book": t["book_id"], "side": t.get("side"), "size": _f(t.get("size")), "opened_at": t.get("opened_at"),
+                    "closed_at": t.get("closed_at"), "entry": _f(t.get("entry")), "exit": _f(t.get("exit")),
+                    "gross_pnl": _f(t.get("gross_pnl")), "spread_slippage_cost": _f(t.get("spread_slippage_cost")),
+                    "commission": _f(t.get("commission")), "swap": _f(t.get("swap")), "pnl": _f(t.get("pnl")),
+                    "r": _f(t.get("r_multiple")), "mfe_r": _f(t.get("mfe_r")), "mae_r": _f(t.get("mae_r")),
+                    "exit_reason": t.get("exit_reason")} for t in trades],
+        "open_positions": [{"book": b, "entry": _f(p.get("entry")), "stop": _f(p.get("stop")),
+                            "take_profit": _f(p.get("take_profit")), "opened_at": p.get("opened_at")}
+                           for b, p in positions.items()],
+        "chart": data, "grok_reviews": reviews,
+        "evidence_note": ("Warm-up signal: generated on history before the forward-test boundary; it is not evidence "
+                          "and no book acted on it.") if sig["status"] == "warmup" else None}
+
+
+# --------------------------------------------------------------------------- response hygiene
+
+def _sensitive_roots(cfg: dict) -> list[tuple[str, str]]:
+    roots = []
+    for name, m in cfg["markets"].items():
+        roots += [(m["state_dir"], f"<{name} state>"), (m["repo"], f"<{name} checkout>")]
+        roots += [(p, f"<{name} history>") for p in m.get("history", {}).values()]
+    for s in cfg["strategies"]:
+        for key in ("state_dir", "repo"):
+            if s.get(key):
+                roots.append((s[key], f"<{s['id']} {key}>"))
+    g = cfg.get("grok", {})
+    roots += [(d, "<advisory store>") for d in g.get("advisory_dirs", [])]
+    if g.get("config"):
+        roots.append((g["config"], "<grok config>"))
+    roots.append((str(Path.home()), "<home>"))
+    out = []
+    for path, label in roots:
+        for variant in {path, path.replace("/", "\\"), path.replace("\\", "/"), path.replace("\\", "\\\\")}:
+            out.append((variant, label))
+    return sorted(out, key=lambda x: -len(x[0]))  # longest first
+
+
+def scrub(value, cfg: dict):
+    """Remove local filesystem paths (and the user's home directory) from any response value."""
+    text = json.dumps(value, default=str)
+    if not any(v in text for v, _ in _sensitive_roots(cfg)):
+        return value
+    for variant, label in _sensitive_roots(cfg):
+        text = text.replace(json.dumps(variant)[1:-1], label)
+    return json.loads(text)

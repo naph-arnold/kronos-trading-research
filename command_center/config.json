@@ -2,6 +2,11 @@
   "schema_version": 1,
   "purpose": "Kronos Trading Command Center V1 (read-only). Paths to the running runners' state and to recorded market history. Nothing here is written to.",
   "bind": {"host": "127.0.0.1", "port": 8765},
+  "security": {
+    "allowed_hosts": ["127.0.0.1", "localhost"],
+    "token_env": "KRONOS_CC_TOKEN",
+    "note": "Local-only. A VPS deployment keeps the app on 127.0.0.1 behind an HTTPS reverse proxy that authenticates users; add the public host name to allowed_hosts and set KRONOS_CC_TOKEN (the proxy injects it as a Bearer header)."
+  },
   "health_window_hours": 24,
   "markets": {
     "xauusd": {

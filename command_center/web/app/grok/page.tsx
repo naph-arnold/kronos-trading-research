@@ -10,15 +10,15 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 export default function GrokPage() {
-  const { data, error, loading } = usePoll<GrokRoom>("/api/grok", 30000);
+  const { data, error, loading, updatedAt } = usePoll<GrokRoom>("/api/grok", 30000);
   if (loading && !data) return <Loading />;
-  if (!data) return <ErrorNote error={error} />;
+  if (!data) return <ErrorNote error={error} updatedAt={updatedAt} />;
   const reviews = data.stores.flatMap((s) => s.summaries);
   return (
     <div className="space-y-4">
-      <ErrorNote error={error} />
+      <ErrorNote error={error} updatedAt={updatedAt} />
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold text-slate-100">Grok Decision Room</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-slate-50">Grok Decision Room</h1>
         <StateBadge state={data.status === "active" ? "running" : "prepared"} label={data.status} />
       </div>
       <div className="rounded-xl border border-info/30 bg-info/10 px-4 py-3 text-[13px] text-info">

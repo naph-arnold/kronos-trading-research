@@ -531,6 +531,65 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Phase 5 — Command Center V1 completion (sections 7–11) (2026-11-09)
+Branch `feat/command-center-v1` (PR #24). Status: **Verified**. Only missing functionality was added; completed
+features were kept.
+
+### Added
+- **History and analytics** (`/history/`, `services.history`, `equity`, `signal_detail`). Searchable and
+  filterable (text, strategy, status, UTC date range), paginated and sortable:
+  - signals;
+  - risk decisions with reasons and categories;
+  - simulated trades with gross, spread/slippage, commission, swap, net, R and MFE/MAE;
+  - simulated equity and derived drawdown per book;
+  - interruptions and alerts (event classes);
+  - recorded Grok responses.
+- **Signal record** (`/signal/?runner=&id=`): market-context chart around the signal, strategy context and
+  provenance, every book's risk decision (planned risk as % of equity), simulated execution with costs, Grok
+  review (none yet).
+- **Resilience:** an unreadable or locked runner database is reported as "data unavailable" per runner; the
+  other runners keep working.
+- **Security:**
+  - Host allow-list (DNS rebinding);
+  - CSP, X-Frame-Options, nosniff, referrer and permissions headers;
+  - generic 503 errors (no tracebacks);
+  - paths scrubbed from every response;
+  - optional bearer token for a future proxy deployment;
+  - non-loopback bind refused without a token;
+  - duplicate server refused (port check).
+- **Launcher:** `Kronos Command Center.cmd` and `Stop Kronos Command Center.cmd`, built on
+  `ops/windows/command_center.ps1` (start / stop / status / open / restart / setup / rebuild):
+  - uses `.venv-cc`;
+  - detects a running dashboard by `/api/health` identity;
+  - mutex against parallel launches;
+  - opens the browser;
+  - meaningful errors with log location;
+  - graceful stop through a stop request in `%LOCALAPPDATA%\KronosCommandCenter`; the fallback kill only targets
+    the dashboard PID and refuses runner command lines.
+  - Optional start-at-logon task prepared (`command_center_startup_task.ps1`, dry run; **not registered**).
+- **Interface:** UTC/local time toggle (remembered), live quote ticker, icon navigation, OHLC crosshair readout,
+  time-zone-aware chart axes, sortable tables, skeleton loading, error banner with the time of the last good
+  data, "off-market print" markers, and an "unavailable" state per runner.
+
+### Findings
+- **XAUUSD spike: broker data, not a dashboard issue.**
+  - On 2, 3, 4 and 5 Nov 2026, at exactly 23:05 UTC (01:05 server time, five minutes after the daily reopen),
+    the MetaQuotes-Demo feed contains a bid at 3914.40 (3914.34 on 2 Nov), while the market traded at about
+    3932–4088.
+  - It is present in the broker's raw tick export (`copy_ticks_range`), in its M1/M5/M15/H1 bar histories, and in
+    the running runner's warm-up bars.
+  - The weekend reopen on 8 Nov was clean.
+  - Nothing was edited. The dashboard flags such bars as derived "off-market print" notes.
+  - Implication for later research: wick-based features and ATR near the daily reopen can be distorted on this
+    broker feed. Not a change to any frozen experiment.
+
+### Tests
+- `tests/test_command_center.py`: 23 tests (history, signal record, filters, outliers, unreadable database,
+  security headers, host allow-list, token, path scrubbing, bind and duplicate refusal).
+- Launcher exercised end to end: start, duplicate start detected, direct second server refused (exit 3), forged
+  Host header 400, no path leaks in any response, graceful stop, status.
+- Runners unaffected throughout.
+
 ## Milestone: Phase 5 — Trading Command Center V1 (2026-11-09)
 Branch `feat/command-center-v1` (worktree `C:\Users\Admin\Projects\kronos-command-center`, stacked on PR #23).
 Status: **Verified** (tests, live read-only smoke test, screenshots). Details: `docs/command-center.md`.
@@ -560,7 +619,7 @@ Status: **Verified** (tests, live read-only smoke test, screenshots). Details: `
 - Live bars exist only at the runners' intervals (XAU 15m, BTC 1h). Recorded 1m/5m history ends on 2026-11-06
   (XAU) and 2026-05-31 (BTC).
 - No forward signals or simulated trades yet.
-- The Phase 5 brief was truncated at section 6; the Decision Room is read-only until the rest is specified.
+- The Phase 5 brief was truncated at section 6 here; sections 7–11 arrived later and are completed in the milestone above.
 
 ## Milestone: Strategy A launch preparation and Grok trial readiness (2026-11-09)
 Branch `ops/xau-selective-a-readiness` (PR #23). Status: **Verified** (tests and dry runs). Strategy A **not

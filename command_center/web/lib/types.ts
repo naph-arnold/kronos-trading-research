@@ -86,6 +86,7 @@ export interface ChartData {
   signals: ChartSignal[]; trades: ChartTrade[];
   positions: { book: string; strategy: string; side: string; entry: number | null; entry_time: number; stop: number | null; take_profit: number | null }[];
   opening_ranges: { signal_id: string; from: number; to: number; low: number; high: number; session: string }[];
+  outliers?: { time: number; low: number; high: number; wick: number; median_range: number }[];
 }
 
 export interface SignalRow { signal_id: string; strategy: string; control: boolean; status: string; bar_close: string;
@@ -105,3 +106,42 @@ export interface GrokRoom {
     outputs: { subject: string; role: string; at: string; valid: boolean; error: string | null }[];
     audit: { ok: boolean; records?: number; problems: string[] } | null }[];
 }
+
+/* ---- History, equity and signal detail (V1.1) ---- */
+
+export interface HistoryPage<T> { runner: string; label: string; kind: string; available: boolean; total: number;
+  offset?: number; rows: T[]; note?: string }
+
+export interface HSignal { at: string; signal_id: string; strategy: string; status: string; side: string;
+  entry: number | null; stop: number | null; take_profit: number | null; approved: number; rejected: number; traded: boolean }
+export interface HDecision { at: string; book: string; strategy: string | null; signal_id: string; approved: boolean;
+  size: number | null; planned_risk: number | null; reasons: string[]; categories: string[] }
+export interface HTrade { at: string; opened_at: string | null; book: string; strategy: string | null; signal_id: string;
+  side: string | null; size: number | null; entry: number | null; exit: number | null; stop: number | null;
+  take_profit: number | null; gross_pnl: number | null; costs: { spread_slippage_cost: number | null; commission: number | null; swap: number | null };
+  pnl: number | null; r: number | null; mfe_r: number | null; mae_r: number | null; exit_reason: string | null;
+  planned_risk: number | null; loss_beyond_planned: number | null }
+export interface HEvent { at: string; event: string; class: string; detail: string }
+
+export interface EquityBook { book: string; strategy: string; initial_equity: number; commission: number; points: number;
+  equity: { time: number; value: number }[]; drawdown_pct: { time: number; value: number }[]; last: number; max_drawdown_pct: number }
+export interface EquityData { runner: string; available: boolean; books: EquityBook[]; note?: string }
+
+export interface SignalDetail {
+  runner: string; label: string; signal_id: string; strategy: string; status: string; bar_close: string; side: string;
+  entry: number | null; stop: number | null; take_profit: number | null; generated_at: string | null;
+  strategy_version: string | null; interval: string; context: Record<string, unknown> | null; params_hash: string | null;
+  dataset_id: string | null;
+  decisions: { book: string; approved: boolean; at: string; size: number | null; planned_risk: number | null;
+    reasons: string[]; categories: string[]; equity_at_decision: number | null; initial_equity: number | null }[];
+  trades: { book: string; side: string | null; size: number | null; opened_at: string | null; closed_at: string | null;
+    entry: number | null; exit: number | null; gross_pnl: number | null; spread_slippage_cost: number | null;
+    commission: number | null; swap: number | null; pnl: number | null; r: number | null; mfe_r: number | null;
+    mae_r: number | null; exit_reason: string | null }[];
+  open_positions: { book: string; entry: number | null; stop: number | null; take_profit: number | null; opened_at: string | null }[];
+  chart: ChartData; grok_reviews: { subject: string; at: string; runner: string; recommendation: string; body: Record<string, unknown> }[];
+  evidence_note: string | null;
+}
+
+export interface Meta { runners: Record<string, { label: string; market: string }>;
+  strategies: { id: string; name: string; market: string; strategy_key: string }[] }

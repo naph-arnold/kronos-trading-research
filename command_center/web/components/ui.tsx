@@ -1,3 +1,6 @@
+"use client";
+
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 /** The four kinds of information the dashboard distinguishes everywhere. */
@@ -43,6 +46,9 @@ const STATE_STYLE: Record<string, string> = {
   disconnected: "bg-down/15 text-down border-down/40",
   stale: "bg-warn/15 text-warn border-warn/40",
   closed: "bg-slate-500/15 text-slate-300 border-slate-500/40",
+  unavailable: "bg-down/15 text-down border-down/40",
+  "data unavailable": "bg-down/15 text-down border-down/40",
+  "not activated": "bg-info/15 text-info border-info/40",
 };
 
 export function StateBadge({ state, label }: { state: string | null | undefined; label?: string }) {
@@ -90,15 +96,81 @@ export function Empty({ children }: { children: ReactNode }) {
   );
 }
 
-export function ErrorNote({ error }: { error: string | null }) {
+export function ErrorNote({ error, updatedAt }: { error: string | null; updatedAt?: Date | null }) {
   if (!error) return null;
   return (
-    <div className="rounded-lg border border-down/40 bg-down/10 px-3 py-2 text-xs text-down">
-      Dashboard API unreachable: {error}. Displayed values may be outdated; nothing is extrapolated.
+    <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-down/40 bg-down/10 px-3 py-2 text-xs text-down">
+      <span className="font-semibold">Dashboard API unreachable</span> <span className="text-down/80">({error}).</span>
+      {updatedAt ? <span>Showing the last data received at {updatedAt.toISOString().slice(11, 19)} UTC; nothing is extrapolated.</span>
+        : <span>No data could be loaded. Is the Command Center server running?</span>}
     </div>
   );
 }
 
-export function Loading() {
-  return <div className="animate-pulse text-sm text-mute">Loading recorded data…</div>;
+export function Loading({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading recorded data">
+      <div className="skeleton h-6 w-48" />
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {Array.from({ length: rows }).map((_, i) => <div key={i} className="skeleton h-40" />)}
+      </div>
+    </div>
+  );
+}
+
+export interface Column<T> {
+  key: string;
+  label: string;
+  render: (row: T) => ReactNode;
+  sort?: (row: T) => number | string | null;
+  align?: "right";
+  className?: string;
+}
+
+/** Sortable table (click a header). Sorting is local to the rows already loaded. */
+export function DataTable<T>({ rows, columns, onRow, rowKey, empty, maxH = "max-h-[560px]", initialSort }: {
+  rows: T[]; columns: Column<T>[]; onRow?: (r: T) => void; rowKey: (r: T, i: number) => string;
+  empty?: ReactNode; maxH?: string; initialSort?: { key: string; dir: 1 | -1 };
+}) {
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(initialSort ?? null);
+  const sorted = useMemo(() => {
+    const col = columns.find((c) => c.key === sort?.key);
+    if (!col?.sort || !sort) return rows;
+    const f = col.sort;
+    return [...rows].sort((a, b) => {
+      const x = f(a), y = f(b);
+      if (x === y) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return (x < y ? -1 : 1) * sort.dir;
+    });
+  }, [rows, columns, sort]);
+  if (!rows.length) return <>{empty ?? <Empty>No recorded rows match.</Empty>}</>;
+  return (
+    <div className={`${maxH} overflow-auto rounded-lg border border-line/70`}>
+      <table className="tbl">
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} className={c.align === "right" ? "text-right" : ""}>
+                {c.sort ? (
+                  <button className="inline-flex items-center gap-1 uppercase tracking-wider hover:text-slate-200"
+                    onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>
+                    {c.label}<span className="text-[9px]">{sort?.key === c.key ? (sort.dir === 1 ? "▲" : "▼") : "↕"}</span>
+                  </button>
+                ) : c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => (
+            <tr key={rowKey(r, i)} onClick={onRow ? () => onRow(r) : undefined} className={onRow ? "cursor-pointer" : ""}>
+              {columns.map((c) => <td key={c.key} className={`${c.align === "right" ? "num text-right" : ""} ${c.className ?? ""}`}>{c.render(r)}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }

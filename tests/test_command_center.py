@@ -256,3 +256,163 @@ def test_api_is_get_only_and_serves_every_view(tmp_path):
     assert client.get("/api/chart/eurusd").status_code == 404
     for method in ("post", "put", "delete", "patch"):
         assert getattr(client, method)("/api/overview").status_code == 405
+
+
+# --------------------------------------------------------------------------- V1.1: history, resilience, security
+
+def _with_trade(cfg) -> Path:
+    state = Path(cfg["markets"]["xauusd"]["state_dir"])
+    db = _store(state, n_bars=40)
+    close = NOW - timedelta(hours=5)
+    close = close.replace(minute=(close.minute // 15) * 15)
+    s = ShadowStore(db)
+    with s.transaction():
+        s.record_signal("orb_newyork", "sig1", close, "evaluated", {"side": "long", "entry_price": "2010",
+                        "stop_price": "2000", "take_profit": "2030", "provenance": {"interval": "15m",
+                        "context": {"atr": 4.2}, "params_hash": "abc"}})
+        s.record_signal("random_s1", "rnd1", close, "evaluated", {"side": "short"})
+        s.record_decision("orb_newyork.e10000.c0", "sig1", dedup_key="k0", evaluated_at=close, approved=False,
+                          size=None, planned_risk=None, reasons=["Spread 0.9 exceeds max 0.5"], context={})
+        s.record_decision("orb_newyork.e10000.c7", "sig1", dedup_key="k", evaluated_at=close, approved=True,
+                          size=D("0.1"), planned_risk=D("50"), reasons=[], context={"equity": "10000"})
+        trade = {"side": "long", "entry": "2010", "exit": "2000", "stop": "2000", "take_profit": "2030",
+                 "opened_at": close.isoformat(), "closed_at": (close + timedelta(hours=1)).isoformat(),
+                 "gross_pnl": "-46", "spread_slippage_cost": "2", "commission": "2", "swap": "0", "pnl": "-50",
+                 "r_multiple": "-1", "planned_risk": "50", "risk_budget": "50", "loss_beyond_planned": "0",
+                 "exit_reason": "stop", "signal_id": "sig1"}
+        s.open_position("orb_newyork.e10000.c7", "sig1", {})
+        s.close_position("orb_newyork.e10000.c7", "sig1", close + timedelta(hours=1), D("-50"), trade)
+        s.add_equity("orb_newyork.e10000.c7", close, D("10000"))
+        s.add_equity("orb_newyork.e10000.c7", close + timedelta(hours=1), D("9950"))
+        s.event(close, "data_interruption", consecutive=1, error="Mt5Unavailable")
+        s.event(close, "mt5_account_check", balance=3000.0)
+    s.close()
+    return db
+
+
+def test_history_is_searchable_across_signals_decisions_trades_and_events(tmp_path):
+    cfg = _cfg(tmp_path)
+    _with_trade(cfg)
+    sig = services.history(cfg, "xauusd", "signals", strategy="orb_newyork")
+    assert sig["total"] == 1 and sig["rows"][0]["approved"] == 1 and sig["rows"][0]["traded"] is True
+    rej = services.history(cfg, "xauusd", "decisions", status="rejected")
+    assert rej["total"] == 1 and rej["rows"][0]["categories"] == ["spread_limit"]
+    assert services.history(cfg, "xauusd", "decisions", q="spread")["total"] == 1
+    tr = services.history(cfg, "xauusd", "trades")["rows"][0]
+    assert tr["pnl"] == -50 and tr["costs"]["commission"] == 2 and tr["exit_reason"] == "stop"
+    ev = services.history(cfg, "xauusd", "events", status="interruption")
+    assert ev["total"] == 1 and ev["rows"][0]["event"] == "data_interruption"
+    assert services.history(cfg, "xau_selective_a", "signals")["available"] is False
+    eq = services.equity(cfg, "xauusd", strategy="orb_newyork")
+    book = next(b for b in eq["books"] if b["book"] == "orb_newyork.e10000.c7")
+    assert book["last"] == 9950 and book["max_drawdown_pct"] == pytest.approx(-0.5)
+    with pytest.raises(ValueError):
+        services.history(cfg, "xauusd", "orders")
+
+
+def test_signal_detail_links_context_chart_decisions_execution_and_reviews(tmp_path):
+    cfg = _cfg(tmp_path)
+    _with_trade(cfg)
+    d = services.signal_detail(cfg, "xauusd", "sig1")
+    assert d["context"] == {"atr": 4.2} and d["params_hash"] == "abc" and d["interval"] == "15m"
+    assert {x["book"] for x in d["decisions"]} == {"orb_newyork.e10000.c0", "orb_newyork.e10000.c7"}
+    (t,) = d["trades"]
+    assert (t["gross_pnl"], t["spread_slippage_cost"], t["commission"], t["pnl"]) == (-46, 2, 2, -50)
+    assert d["chart"]["candles"] and d["grok_reviews"] == [] and d["evidence_note"] is None
+    with pytest.raises(KeyError):
+        services.signal_detail(cfg, "xauusd", "nope")
+
+
+def test_chart_filters_controls_and_flags_off_market_prints(tmp_path):
+    cfg = _cfg(tmp_path)
+    _with_trade(cfg)
+    both = services.chart(cfg, "xauusd", "15m", limit=200)
+    assert {s["strategy"] for s in both["signals"]} == {"orb_newyork", "random_s1"}
+    only = services.chart(cfg, "xauusd", "15m", limit=200, include_controls=False)
+    assert {s["strategy"] for s in only["signals"]} == {"orb_newyork"}
+    candles = [{"time": i, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5} for i in range(30)]
+    candles[10] = {"time": 10, "open": 100.0, "high": 101.0, "low": 60.0, "close": 100.5}
+    assert [o["time"] for o in services._outlier_wicks(candles)] == [10]
+
+
+def test_unreadable_database_is_reported_not_crashed(tmp_path):
+    cfg = _cfg(tmp_path)
+    state = Path(cfg["markets"]["xauusd"]["state_dir"])
+    state.mkdir(parents=True)
+    (state / "shadow.sqlite").write_bytes(b"this is not a database" * 100)
+    o = services.overview(cfg)
+    assert o["markets"]["xauusd"]["available"] is False and o["markets"]["xauusd"]["runner"] == "data unavailable"
+    xau = next(s for s in o["strategies"] if s["id"] == "xau_orb")
+    assert xau["lifecycle"] == "unavailable" and xau["metrics"] is None
+    text = json.dumps(o)
+    assert str(tmp_path) not in text and str(tmp_path).replace("\\", "/") not in text  # no paths leaked
+
+
+def _client(tmp_path, cfg, **extra):
+    from fastapi.testclient import TestClient
+
+    from command_center.api import create_app
+    path = tmp_path / "cc.json"
+    path.write_text(json.dumps({**cfg, "bind": {"host": "127.0.0.1", "port": 1}, **extra}))
+    return TestClient(create_app(path))
+
+
+def test_api_security_headers_hosts_errors_and_no_paths(tmp_path):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    cfg = _cfg(tmp_path)
+    _with_trade(cfg)
+    c = _client(tmp_path, cfg)
+    r = c.get("/api/overview")
+    assert r.status_code == 200 and "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-frame-options"] == "DENY" and r.headers["x-content-type-options"] == "nosniff"
+    assert str(tmp_path) not in r.text and str(tmp_path).replace("\\", "/") not in r.text  # no filesystem paths
+    for url in ("/api/history/xauusd/trades?q=stop", "/api/equity/xauusd", "/api/signal/xauusd/sig1",
+                "/api/history/xauusd/events?status=interruption", "/api/health"):
+        assert c.get(url).status_code == 200, url
+    assert c.get("/api/signal/xauusd/missing").status_code == 404
+    assert c.get("/api/history/xauusd/orders").status_code == 404
+    assert c.get("/api/meta", headers={"host": "evil.example"}).status_code == 400  # DNS rebinding
+    assert c.post("/api/health").status_code == 405
+    health = c.get("/api/health").json()
+    assert health["service"] == "kronos-command-center" and health["read_only"] and not health["orders_possible"]
+
+
+def test_optional_token_protects_the_api_for_future_remote_use(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    monkeypatch.setenv("KRONOS_CC_TOKEN", "s3cret-token")
+    c = _client(tmp_path, _cfg(tmp_path))
+    assert c.get("/api/meta").status_code == 401
+    assert c.get("/api/meta", headers={"Authorization": "Bearer s3cret-token"}).status_code == 200
+    assert c.get("/api/health").status_code == 200  # liveness only; no runner data
+    assert "s3cret-token" not in c.get("/api/health").text
+
+
+def test_server_refuses_public_bind_and_duplicate_instance(tmp_path, monkeypatch, capsys):
+    import socket
+
+    from command_center import __main__ as m
+    monkeypatch.delenv("KRONOS_CC_TOKEN", raising=False)
+    monkeypatch.setattr("sys.argv", ["cc", "--host", "0.0.0.0", "--allow-remote-bind"])
+    with pytest.raises(SystemExit) as exc:
+        m.main()
+    assert exc.value.code == m.EXIT_UNSAFE_BIND
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        port = busy.getsockname()[1]
+        monkeypatch.setattr("sys.argv", ["cc", "--port", str(port)])
+        with pytest.raises(SystemExit) as exc:
+            m.main()
+    assert exc.value.code == m.EXIT_PORT_IN_USE and "already in use" in capsys.readouterr().err
+
+
+def test_scrub_removes_local_paths_in_both_slash_styles(tmp_path):
+    cfg = _cfg(tmp_path)
+    state = cfg["markets"]["xauusd"]["state_dir"]
+    value = {"a": f"{state}/shadow.sqlite", "b": f"OSError: {state.replace('/', chr(92))}{chr(92)}x",
+             "c": f"{Path.home()}{chr(92)}secret.txt", "d": "plain"}
+    text = json.dumps(services.scrub(value, cfg))
+    assert str(tmp_path) not in text and str(tmp_path).replace(chr(92), "/") not in text
+    assert str(Path.home()) not in text and "plain" in text and "<xauusd state>" in text

@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { usePoll } from "@/lib/api";
+import Link from "next/link";
 import { dash, fmtNum, fmtTime } from "@/lib/format";
 import type { ChartData, ChartSignal, SignalRow } from "@/lib/types";
 import type { Layers } from "@/components/CandleChart";
@@ -20,7 +21,7 @@ const STRATS: Record<string, { id: string; name: string }[]> = {
 type Avail = Record<string, { available: boolean; sources: { kind: string; base: string; from?: string; to?: string }[] }>;
 
 const LAYER_LABELS: [keyof Layers, string][] = [
-  ["volume", "Volume"], ["ema", "EMA 20/50"], ["signals", "Signals"], ["controls", "Random controls"],
+  ["volume", "Volume"], ["ema", "EMA 20/50"], ["signals", "Signals"], ["controls", "Baselines & controls"],
   ["warmup", "Warm-up signals"], ["trades", "Sim. entries/exits"], ["levels", "SL / TP"], ["ranges", "Opening ranges"],
   ["structure", "Swing structure"],
 ];
@@ -38,7 +39,7 @@ export default function ChartsPage() {
     trades: true, levels: true, ranges: true, structure: false });
 
   const tfSeconds = TFS.find(([k]) => k === tf)?.[1] ?? 900;
-  const qs = `tf=${tf}&limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`;
+  const qs = `tf=${tf}&limit=${limit}&controls=${layers.controls}&warmup=${layers.warmup}${until ? `&until=${encodeURIComponent(until)}` : ""}`;
   const chart = usePoll<ChartData>(`/api/chart/${market}?${qs}`, until ? 0 : 60000);
   const avail = usePoll<Avail>(`/api/availability/${market}`, 0);
   const sigs = usePoll<{ available: boolean; signals: SignalRow[]; note: string }>(`/api/strategies/${inspect}/signals?limit=300`, 60000);
@@ -62,7 +63,7 @@ export default function ChartsPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-2 text-lg font-semibold text-slate-100">Charts</h1>
+        <h1 className="mr-2 text-xl font-semibold tracking-tight text-slate-50">Charts</h1>
         {MARKETS.map(([k, label]) => (
           <button key={k} className={`btn ${market === k ? "btn-on" : ""}`} onClick={() => switchMarket(k)}>{label}</button>
         ))}
@@ -93,7 +94,7 @@ export default function ChartsPage() {
         ))}
       </div>
 
-      <ErrorNote error={chart.error} />
+      <ErrorNote error={chart.error} updatedAt={chart.updatedAt} />
       <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[1fr_380px]">
         <section className="panel overflow-hidden">
           <div className="panel-h">
@@ -168,12 +169,20 @@ export default function ChartsPage() {
   );
 }
 
+function runnerOf(strategy: string): string {
+  if (strategy === "selective_a") return "xau_selective_a";
+  return ["donchian", "ema_trend", "kronos"].some((k) => strategy.startsWith(k) || strategy.startsWith(`random_${k}`)) ? "btcusdt" : "xauusd";
+}
+
 function SignalDetail({ row, sig, onClear }: { row: SignalRow | null; sig: ChartSignal; onClear: () => void }) {
   return (
     <div className="space-y-2 text-xs">
       <div className="flex items-center justify-between">
         <span className="font-semibold" style={{ color: sig.control ? "#8692a6" : STRATEGY_COLOR[sig.strategy] }}>{sig.strategy}</span>
-        <button className="btn" onClick={onClear}>Clear</button>
+        <div className="flex gap-1.5">
+          <Link className="btn btn-on" href={`/signal/?runner=${row ? runnerOf(row.strategy) : "xauusd"}&id=${encodeURIComponent(sig.signal_id)}`}>Full detail</Link>
+          <button className="btn" onClick={onClear}>Clear</button>
+        </div>
       </div>
       <dl>
         <div className="kv"><dt>Signal</dt><dd className="truncate">{sig.signal_id}</dd></div>

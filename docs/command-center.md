@@ -3,8 +3,8 @@
 A working, read-only web dashboard for the shadow forward tests. Branch `feat/command-center-v1` (worktree
 `C:\Users\Admin\Projects\kronos-command-center`), stacked on PR #23.
 
-**Start:** `.\ops\windows\command_center.ps1`, then open <http://127.0.0.1:8765>. Use `-Setup` the first time and
-`-Rebuild` after changing the frontend.
+**Start:** double-click `Kronos Command Center.cmd` in the worktree folder. It starts the dashboard if it is not
+running and opens <http://127.0.0.1:8765>. **Stop:** double-click `Stop Kronos Command Center.cmd`. See section 6.
 
 ## 1. Architecture
 | Layer | Choice | Notes |
@@ -87,9 +87,79 @@ directory exists and its heartbeats are fresh (< 3 min). `stopped` follows after
   about 170 below its open. This is a broker reopen spike in the recorded MT5 history. It is displayed as recorded;
   the dashboard never edits data.
 
-## 4. Not in V1
-- No controls: no buttons create STOP/KILL, start runners, or activate agents. Any control would need a separate,
-  authenticated, audited design and approval.
-- No push updates (SSE/WebSocket) and no authentication (localhost only).
-- Section 6 of the Phase 5 brief ("Grok Agent Decision Room") was truncated after "Prepare". The room is built as
-  a read-only view of the existing advisory configuration and store; further requirements are pending.
+## 4. History, analytics and signal records (V1.1)
+| Need | Where |
+| --- | --- |
+| Historical strategy signals | History → Signals: search by id or strategy; filter by strategy, status (forward, warm-up and others) and UTC dates; sortable; paginated (100 per page) |
+| Risk-engine decisions and rejection reasons | History → Risk decisions (approved or rejected, size, planned risk, full reasons); Strategies → rejected opportunities; Signal record |
+| Simulated trades and equity changes | History → Simulated trades; History → Equity & drawdown (per book, derived drawdown, selectable books) |
+| Trading costs and drawdowns | Trades table: gross, costs, net, R, MFE/MAE. Signal record: spread/slippage, commission and swap per book. Equity panel: max drawdown |
+| System interruptions and alerts | History → Interruptions & alerts. Every runner event is classed as interruption, alert or routine and is searchable. Overview: window summary |
+| Grok advisory responses | History → Grok advisory (per-role outputs, validation errors, audit-chain status). Signal record: review of that signal. Today: none (not activated) |
+| Inspect one signal | Click any row (History, or Charts → Signal history → Full detail). The record shows the market context chart (recorded candles, opening range, SL/TP, simulated execution), strategy context and provenance, every book's decision, execution with costs, and the Grok review |
+
+## 5. Security and remote-access design
+**Local (V1, active):**
+- Bind `127.0.0.1:8765`. A non-loopback bind is refused unless `KRONOS_CC_TOKEN` is set and
+  `--allow-remote-bind` is given.
+- GET-only; any other method returns 405 before routing.
+- Host allow-list (`127.0.0.1`, `localhost`) against DNS rebinding.
+- Headers: CSP (`default-src 'self'`; `connect-src 'self'`; `frame-ancestors 'none'`), `X-Frame-Options: DENY`,
+  `nosniff`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and `Cache-Control: no-store` on
+  the API.
+- Errors return a generic 503 (no tracebacks). Every response passes `services.scrub`: configured state, checkout,
+  history and advisory paths and the home directory are replaced by labels.
+- No credential is ever read. The Grok room reports only whether `XAI_API_KEY` is present. Broker credentials are
+  not used by the dashboard.
+
+**Future VPS deployment (prepared, not deployed):**
+1. The app stays on `127.0.0.1`. An HTTPS reverse proxy (for example Caddy or nginx) terminates TLS (Let's
+   Encrypt) and authenticates users (OIDC or SSO, or at least strong basic auth with rate limiting), ideally
+   restricted further by VPN or IP allow-list.
+2. Set `KRONOS_CC_TOKEN` (a long random secret) for the app. The proxy injects `Authorization: Bearer <token>`
+   after authenticating, so a local process that bypasses the proxy is still refused.
+3. Add the public host name to `security.allowed_hosts`. Keep `/api/openapi.json` disabled (automatic when a
+   token is set).
+4. The shadow stores must be readable by the app's user, ideally through a read-only replica or the backup copies
+   (`research/state_backup.py`). Never give it write access.
+5. Approval is required before any of this is deployed.
+
+## 6. Local operation (launcher)
+| File | What it does |
+| --- | --- |
+| `Kronos Command Center.cmd` | Starts the dashboard in the background if it is not already running (checked by `/api/health` identity), waits until it answers, then opens the browser. Errors are shown with the log location (`%LOCALAPPDATA%\KronosCommandCenter\logs`), and the window pauses |
+| `Stop Kronos Command Center.cmd` | Graceful stop: writes `stop.request` in `%LOCALAPPDATA%\KronosCommandCenter`, and the server finishes requests and exits. Fallback after 10 s: ends only the PID the dashboard reported, after verifying its command line is `-m command_center` (runner command lines are refused) |
+| `ops\windows\command_center.ps1 -Action status\|open\|restart\|setup\|rebuild` | Status, reopen, restart, first-time setup of `.venv-cc` (and the build if missing), rebuild of the web interface |
+| `ops\windows\command_center_startup_task.ps1` | **Optional** start-at-logon task. Dry run by default; `-Apply` registers it. **Not registered** |
+
+**Duplicate prevention:**
+- a launcher mutex;
+- the health-identity check;
+- the server refuses a busy port (exit 3).
+
+The launcher never starts, stops or modifies a trading runner, a runner task or a STOP/KILL file.
+
+## 7. Usability and reliability verification (2026-11-09)
+| Requirement | Result |
+| --- | --- |
+| Responsive layouts | Grids use `minmax(0,1fr)` columns; tables scroll inside their panel; navigation scrolls horizontally on narrow screens. Screenshots at 1600 px and 600 px (headless Chromium cannot render narrower) |
+| Observed vs simulated | Every figure is tagged observed / simulated / derived / unavailable. Signal prices are *derived* (strategy outputs); book results are *simulated*; quotes, bars and heartbeats are *observed* |
+| Timestamps and freshness | All records are UTC. A UTC/local toggle (stored in the browser) also re-labels chart axes. Quote age, last data update, heartbeat age, and data "fresh"/"stale" come from the runners' own flags |
+| Loading, empty, error states | Skeletons while loading. Empty states say why ("runner not started", "no forward signals yet", "none are invented"). An API failure banner shows the time of the last good data and keeps it |
+| Inactive vs running | Lifecycle badges: prepared / running / paused / blocked / stopped / unavailable. Strategy A shows **prepared** |
+| Grok not activated | Banner and badge "not activated"; gate panel; every agent card "idle"; history and signal records state "not activated" |
+| No invented data | Candles only from recorded files and stores (aggregation labelled); no candle, signal or trade is synthesised (tests) |
+| Hidden or reopened tab | Polling pauses while the tab is hidden and refreshes immediately when it becomes visible (`visibilitychange`) |
+| Disconnected runners, inaccessible databases | A stale heartbeat shows "heartbeat delayed" (3 min) or "not responding" (5 min); a strategy shows "stopped". An unreadable database shows "data unavailable" for that runner only (test) |
+| XAUUSD spike | Broker data (MetaQuotes-Demo daily-reopen print at 3914.40 on 2–5 Nov, present in ticks and all bar timeframes). Not a chart-processing issue. Flagged as "off-market print"; source data unchanged |
+
+## 8. Not in V1 (future versions)
+- Controls (STOP/KILL buttons, runner start/stop, agent activation). These need a separate authenticated,
+  audited design and approval.
+- Remote HTTPS access (design in section 5), multi-user accounts, push alerts (e-mail or Telegram) and SSE
+  streaming.
+- Grok reviews appear once activation is authorised.
+- Equity curves become informative after forward trades exist.
+- Live 1m/5m candles: the runners record only their own intervals (XAU 15m, BTC 1h; Strategy A M5 once
+  launched).
+- Light theme and additional languages. The UI is English, with ISO-style 24 h timestamps and UTC or local time.
