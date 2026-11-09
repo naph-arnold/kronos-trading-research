@@ -4,7 +4,7 @@
   "preregistration": "research/forward_test/xau_selective_a_preregistration.json",
   "preregistration_sha256": "b8574f530356721cca3288432c7a5ff6ec8ad02db02b20da87a08d850fc32bf6",
   "simulation_only": true,
-  "launch_approved": false,
+  "launch_approved": true,
   "server_tz": "eet_eu",
   "state_dir": "state/xau_selective_a_shadow",
   "warmup_start": "2026-09-01T00:00:00+00:00",
