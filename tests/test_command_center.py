@@ -546,7 +546,7 @@ def test_montecarlo_reports_are_served_read_only_and_never_simulated(tmp_path):
     reports = tmp_path / "mc" / "v1" / "reports"
     reports.mkdir(parents=True)
     rep = {"market": "xauusd", "strategy": "orb_newyork", "partition": "historical_holdout", "status": "complete",
-           "evidence": {"closed_trades": 32}, "variants": [], "dataset": {"provenance": {"file": str(tmp_path / "x.json")}}}
+           "evidence": {"closed_trades": 32}, "variants": [], "dataset": {"provenance": {"file": str(reports / "x.json")}}}
     (reports / "xauusd__orb_newyork__historical_holdout.json").write_text(json.dumps(rep))
     (reports.parent / "index.json").write_text(json.dumps({"reports": [
         {"id": "xauusd__orb_newyork__historical_holdout", "market": "xauusd", "strategy": "orb_newyork",
@@ -556,7 +556,7 @@ def test_montecarlo_reports_are_served_read_only_and_never_simulated(tmp_path):
     idx = c.get("/api/montecarlo").json()
     assert [r["id"] for r in idx["reports"]] == ["xauusd__orb_newyork__historical_holdout"]  # unsafe ids dropped
     body = c.get("/api/montecarlo/xauusd__orb_newyork__historical_holdout")
-    assert body.status_code == 200 and str(tmp_path) not in body.text  # paths scrubbed
+    assert body.status_code == 200 and str(reports) not in body.text and "<montecarlo reports>" in body.text
     assert c.get("/api/montecarlo/..%2F..%2Fsecret").status_code == 404
     assert c.get("/api/montecarlo/btcusdt__x__forward").status_code == 404
     assert c.post("/api/montecarlo").status_code == 405  # nothing can start a simulation
