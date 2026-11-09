@@ -139,6 +139,11 @@ providers (official/licensed, attributed)        market-specific rules          
 - **Remote access (future, not deployed):** the app stays on `127.0.0.1` behind an authenticating HTTPS reverse
   proxy. See `docs/command-center.md` section 5.
 
+## MT5 demo execution adapter (Phase 3, built; submission not authorized)
+- `trading/execution/mt5_demo.py` executes only an APPROVED `trading.risk.evaluate` decision, demo accounts only (checked at connect and before every send), behind a written trial approval plus an environment flag, with mandatory SL/TP, round-down sizing, a 0.5% loss re-check using the terminal's own profit calculation, idempotency keys, reconciliation and HALT. No shadow runner, research module or dashboard imports it. No live mode exists.
+- Account data for the dashboard comes from a separate read-only recorder (`research/mt5_account_monitor.py`).
+  Details: [mt5-demo-execution.md](mt5-demo-execution.md), [account-performance.md](account-performance.md).
+
 ## Monte Carlo validation (research only)
 - `research/montecarlo/` resamples recorded closed trades only, one market, strategy, partition and simulated book per dataset, with provenance hashes and fingerprints. It never reads or writes runner state except through read-only SQLite URIs, never imports execution code and cannot change signals, permissions or risk limits.
 - Adaptive sizing is research only and capped at the 0.5% operational ceiling; results never change the operational sizing policy and cannot override a failed historical validation.

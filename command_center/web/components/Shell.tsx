@@ -7,12 +7,13 @@ import type { ReactNode } from "react";
 import { usePoll } from "@/lib/api";
 import { fmtAge, fmtNum, localZoneName, setTzMode, type TzMode } from "@/lib/format";
 import type { Overview } from "@/lib/types";
-import { IconBrain, IconCandles, IconGrid, IconHistory, IconPulse, IconTarget } from "@/components/icons";
+import { IconBrain, IconCandles, IconGrid, IconHistory, IconPulse, IconShield, IconTarget } from "@/components/icons";
 
 const NAV = [
   { href: "/", label: "Overview", icon: IconGrid },
   { href: "/charts/", label: "Charts", icon: IconCandles },
   { href: "/strategies/", label: "Strategies", icon: IconTarget },
+  { href: "/account/", label: "Account", icon: IconShield },
   { href: "/history/", label: "History", icon: IconHistory },
   { href: "/montecarlo/", label: "Monte Carlo", icon: IconPulse },
   { href: "/grok/", label: "Grok Room", icon: IconBrain },
