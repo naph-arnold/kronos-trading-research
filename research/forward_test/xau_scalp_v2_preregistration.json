@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "id": "xau-scalp-v2",
+  "registered_at": "2026-11-09T08:00:00+00:00",
+  "status": "registered before any evaluation of these hypotheses on any data",
+  "purpose": "Three independently defined XAUUSD intraday hypotheses with wider, volatility-adjusted stops. Research only; no orders.",
+  "not_reactivated": ["B (H1-led scalp)", "B4H_only", "B4H", "scalp4h-v1 variants"],
+  "common": {
+    "execution_frame": "1m bid OHLC built from MetaQuotes-Demo ticks; fills at the next 1m open; spread by New York hour profile",
+    "entry_window_utc": [7, 20],
+    "reward_to_risk": 2.0,
+    "min_net_rr_at_fill": 1.5,
+    "max_hold_minutes": 240,
+    "stop_atr_multiples_research_variable": [1.5, 2.5, 4.0],
+    "atr": "ATR(14) of completed 5m bars",
+    "risk": {"risk_fraction": "0.005", "daily_loss_halt_fraction": "0.015", "aggregate_risk_fraction": "0.01", "max_open_positions": 1},
+    "account_equity": 10000,
+    "feasibility_equity": 3000,
+    "costs": {
+      "base": {"spread": "hourly p50 profile", "slippage_per_side": "0.10", "commission_per_lot_round_trip": "0"},
+      "stress": {"spread": "hourly p90 profile", "slippage_per_side": "0.30", "commission_per_lot_round_trip": "7"}
+    },
+    "swap": "verified symbol_info: long -12.6, short -4.6 USD per lot per night, triple Wednesday",
+    "blackouts": "FOMC decisions (official calendar files)"
+  },
+  "hypotheses": {
+    "H1_compression_expansion": {
+      "rationale": "Volatility clusters: after an abnormally quiet period, a range break tends to be followed by a volatility expansion that can travel several ATR before mean reversion; a wide volatility stop survives the noisy retest.",
+      "rules": {
+        "compression": "ATR14(5m) / ATR100(5m) <= 0.75 at the last completed 5m bar",
+        "box": "highest high and lowest low of the last 12 completed 5m bars; width <= 2.0 x ATR100(5m)",
+        "trigger": "first 1m close above box_high + 0.10 x ATR14(5m) (long) or below box_low - 0.10 x ATR14(5m) (short)",
+        "filter": "1h EMA50 slope over 3 bars not opposite to the breakout",
+        "stop": "entry -/+ m x ATR14(5m)",
+        "target": "2.0 R"
+      },
+      "timeframes": "1h filter -> 5m compression/box -> 1m trigger"
+    },
+    "H2_trend_pullback_continuation": {
+      "rationale": "Persistent intraday trends (institutional flow) pause in shallow retracements; entering when price resumes after a bounded 38-62% retracement of a measured impulse buys continuation at a better price than a breakout.",
+      "rules": {
+        "trend": "1h close > EMA50(1h) with EMA50 rising over 3 bars, and 4h close > EMA50(4h) (long; mirrored for short)",
+        "impulse": "within the last 12 completed 15m bars the lowest low precedes the highest high and (high - low) >= 2.5 x ATR14(15m)",
+        "pullback": "the last completed 5m low lies between the 38.2% and 61.8% retracement of that impulse and the 5m close is above the 61.8% level",
+        "trigger": "first 5m close above the highest high of the previous 3 completed 5m bars",
+        "stop": "entry - m x ATR14(5m)",
+        "target": "2.0 R"
+      },
+      "difference_from_rejected_B": "B entered on 1m triggers after an EMA touch with a 1h direction only; H2 requires a measured impulse leg, a Fibonacci-bounded retracement, 4h agreement, a 5m trigger and wider ATR stops.",
+      "timeframes": "4h + 1h trend -> 15m impulse -> 5m pullback and trigger"
+    },
+    "H3_liquidity_sweep_displacement": {
+      "rationale": "Stops cluster beyond the Asian-session range; a sweep of that liquidity that immediately fails and is followed by a strong opposite displacement candle indicates absorption and a likely reversal into the range.",
+      "rules": {
+        "levels": "Asian range = high/low of 1m bars 00:00-06:59 UTC of the same UTC day",
+        "window_utc": [7, 16],
+        "sweep": "a completed 5m bar with high > Asian high + 0.10 x ATR14(5m) and close < Asian high (short setup; mirrored for long)",
+        "displacement": "within the next 3 completed 5m bars, a bearish 5m bar with (open - close) >= 1.0 x ATR14(5m) closing below the sweep bar's low",
+        "entry": "at the displacement bar close",
+        "stop": "the farther of (sweep extreme + 0.10 x ATR14(5m)) and (entry + m x ATR14(5m))",
+        "target": "2.0 R",
+        "frequency": "at most one setup per side per UTC day"
+      },
+      "difference_from_phase2_liquidity_sweep_mss": "Phase 2 used 15m fractal swings; H3 uses the Asian-range liquidity pool, a 5m displacement body filter and volatility-adjusted stops.",
+      "timeframes": "session levels (1m) -> 5m sweep and displacement -> 1m execution"
+    }
+  },
+  "development": {
+    "datasets": [
+      {"name": "dev_2025_2026", "file": "data/raw/mt5_xauusd_1m_ticks_2025_2026.csv", "sha256": "5604b97185e8e8aeb6cd5fbeed4beec819d30e82b7060fcfab8af245bcef33bf", "status": "examined at M5 and above by earlier research: development only"},
+      {"name": "dev_2019_2020", "file": "data/raw/mt5_xauusd_1m_ticks_2019_2020.csv", "status": "examined by the scalp4h out-of-sample test: development only"}
+    ],
+    "selection_rule": "per hypothesis, choose the stop multiple with the highest mean net R on dev_2025_2026 at base costs among variants with >= 100 trades; no other parameter is chosen or changed",
+    "gate_to_validation": "the selected variant needs mean net R > 0 on dev_2025_2026 at base costs AND >= 0 at stress costs AND > 0 on dev_2019_2020 at base costs; otherwise the hypothesis is rejected without validation",
+    "random_controls": "5 matched random seeds per selected variant (diagnostic)"
+  },
+  "validation": {
+    "sources": [
+      "MT5 terminal local M1 cache 2004-2018 (unexamined; readable only after raising Max bars in chart = terminal restart = operator approval; no tick spreads exist for that period, so the stress spread profile p90 of 2019-2020 is used for both cost scenarios)",
+      "prospective shadow forward test of frozen rules (operator approval to launch)"
+    ],
+    "single_run": true,
+    "criteria_all_required": [
+      "mean net R > 0 with Bonferroni-adjusted (m = number of hypotheses entering validation) bootstrap CI lower bound > 0",
+      "mean net R above at least 18 of 20 matched random controls",
+      "profit factor >= 1.1 under stress costs",
+      "positive net result in >= 2/3 of calendar years (historical) or >= 2 of the last 3 two-month blocks (forward)",
+      "max drawdown < 15% at 0.5% risk"
+    ],
+    "outcome": "pass = eligible for a pre-registered shadow forward test and, later, the demo execution trial gate; anything else = rejected"
+  }
+}

@@ -79,3 +79,39 @@ ready to be traded for profit.
 6. A separate live adapter and configuration. This codebase has none, and the demo adapter refuses non-demo accounts.
 
 The Command Center's "Real money (future)" tab shows this gate with every item "not met".
+
+## 5. Pre-trial checklist: one controlled mechanics order (run 2026-11-09 07:09 UTC, read-only)
+`python -m research.mt5_demo_trial preflight` connects through the read-only proxy, builds the single mechanics order
+and runs it through `trading.risk.evaluate` and the adapter's `build_request`. **Nothing is sent.**
+
+| Check | Result |
+| --- | --- |
+| Demo account (trade_mode 0), MetaQuotes-Demo | ✓ |
+| Terminal connected | ✓ |
+| Account trading allowed | ✓ |
+| Filling mode | ✓ FOK/IOC available; FOK selected |
+| Minimum lot / step | ✓ 0.01 / 0.01 |
+| Mechanics order | BUY 0.01 at ask 4105.71, SL 4093.53, TP 4117.46 (± 3 × ATR(5m), rounded to tick), comment `kr:<key>`, magic 260901 |
+| Risk engine (session calendar, quote age, tick alignment, 0.5% ceiling) | ✓ approved: 0.01 lot, planned risk 12.24 USD = 0.41% of 3,000 |
+| Loss at stop (terminal `order_calc_profit`) + 7 USD/lot | ✓ 12.18 + 0.07 USD ≤ 15 USD |
+| **Terminal Algo Trading enabled** | ✗ **operator must press the Algo Trading button** |
+| **Trial approval file** | ✗ **operator writes it** (`python -m research.mt5_demo_trial template`) |
+
+The first preflight run was correctly **refused by the risk engine**: no session calendar, a quote read in the wrong
+time zone ("future-dated"), and a stop and target not aligned to the tick. The driver was fixed. This confirms the
+engine fails closed on bad inputs.
+
+**Single-order trial, once you approve the specific limits:**
+1. You enable Algo Trading.
+2. You save the template as `state/mt5_demo_execution/TRIAL_APPROVAL.json`: `max_orders_per_day` 1,
+   `max_open_positions` 1, and an expiry a few hours ahead.
+3. Run `KRONOS_MT5_DEMO_TRIAL=<id> python -m research.mt5_demo_trial execute`. It reconciles, sends one FOK order
+   through the adapter, verifies the broker SL/TP, and reconciles again.
+4. Watch the Command Center → Account → MT5 demo broker: the position, its SL/TP, the execution log, and the balance
+   check.
+5. The position closes only by its own SL or TP (or by you in the terminal). The adapter records the close with
+   commission and swap from the deals.
+6. Remove the approval file. Report: requested versus filled price (slippage), commission charged, latency, return
+   codes, and reconciliation.
+
+The order can lose at most about 12 USD (0.4%) plus slippage.

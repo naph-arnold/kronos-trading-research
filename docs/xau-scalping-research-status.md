@@ -66,5 +66,8 @@ Descriptive only: no strategy, no parameter search.
 5. **Execution realism:** minimum lot 0.01 (at 3,000 USD and a 0.5% risk budget, a 5 USD stop allows at most 0.03
    lots), stops level, fill at the next tick, and a latency allowance.
 
+## 4. Update: scalp v2 (three new pre-registered hypotheses), 2026-11-09
+H1 compression → expansion, H2 trend-pullback continuation and H3 liquidity sweep → displacement were all **rejected at the pre-registered development gate**. Only H2 with 4 × ATR stops was positive on 2025–26 (+0.12 R, gross +0.14 R), and it failed on 2019–20 (−0.115 R). See [xau-scalp-v2-research.md](xau-scalp-v2-research.md) and [mt5-execution-economics.md](mt5-execution-economics.md).
+
 **Next step (needs your decision):** choose one mechanism to pre-register, and approve either the MT5 restart (for
 2004–2018 data) or a forward shadow test as the independent evidence.

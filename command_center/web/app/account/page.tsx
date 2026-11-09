@@ -177,6 +177,14 @@ function Broker({ v }: { v: View }) {
           )}
         </Panel>
       </div>
+      <Panel title={<span className="flex items-center gap-2">Broker balance &amp; equity over time <KindTag kind="observed" /></span>}>
+        {!(v.series?.points) ? <Empty>No balance/equity observations recorded.</Empty> : (
+          <EquityChart books={[
+            { book: "balance", strategy: "", initial_equity: 0, commission: 0, points: v.series.points, trades: 0, marks: 0, realized_pnl: 0, realized: [], equity: v.series.balance, drawdown_pct: [], last: 0, max_drawdown_pct: 0 },
+            { book: "equity", strategy: "", initial_equity: 0, commission: 0, points: v.series.points, trades: 0, marks: 0, realized_pnl: 0, realized: [], equity: v.series.equity, drawdown_pct: [], last: 0, max_drawdown_pct: 0 }]} height={240} />
+        )}
+        <p className="mt-2 text-[11px] text-mute">{v.series?.points ?? 0} observations ({v.series?.source}). Gaps are not interpolated. Demo money.</p>
+      </Panel>
       <Panel title="Open broker positions">
         {!(v.open_positions?.positions?.length) ? <Empty>No open positions at the broker.</Empty> : (
           <table className="tbl"><thead><tr><th>Ticket</th><th>Side</th><th className="text-right">Volume</th><th className="text-right">Open → now</th><th className="text-right">SL / TP</th><th className="text-right">Floating</th></tr></thead>
@@ -208,6 +216,15 @@ function Shadow({ v, setStrategy }: { v: View; setStrategy: (s: string) => void 
             <Stat label="Open positions" value={v.open_positions?.length ?? 0} sub="floating marked at bar closes" />
             <Stat label="Rejected opportunities" value={v.rejected?.length ?? 0} sub="risk-engine rejections" />
           </div>
+          <Panel title="Open simulated positions (entry, stop, target)">
+            {!(v.open_positions?.length) ? <Empty>No open simulated position.</Empty> : (
+              <table className="tbl"><thead><tr><th>Opened</th><th>Signal</th><th>Side</th><th className="text-right">Size</th><th className="text-right">Entry</th><th className="text-right">Stop</th><th className="text-right">Target</th><th className="text-right">Planned risk</th></tr></thead>
+                <tbody>{v.open_positions.map((p: View) => (
+                  <tr key={p.book}><td className="num">{fmtShort(p.opened_at)}</td><td className="num">{p.signal_id}</td><td>{p.side}</td><td className="num text-right">{p.size}</td>
+                    <td className="num text-right">{fmtNum(Number(p.entry))}</td><td className="num text-right">{fmtNum(Number(p.stop))}</td><td className="num text-right">{p.take_profit ? fmtNum(Number(p.take_profit)) : dash}</td><td className="num text-right">{fmtMoney(Number(p.planned_risk))}</td></tr>))}</tbody></table>
+            )}
+            <p className="mt-2 text-[11px] text-mute">Floating P&amp;L of shadow positions is marked at bar closes (see simulated equity).</p>
+          </Panel>
           <PerformancePanel p={v.performance} capitalLabel="starting equity" />
           <Panel title="Closed simulated trades (click for details)"><TradesTable trades={v.closed_trades} empty="No closed forward-test trades yet. Warm-up signals are never trades." /></Panel>
           <Panel title="Why trades were not taken (risk-engine rejections)">
