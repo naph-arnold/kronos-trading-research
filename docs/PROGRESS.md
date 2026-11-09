@@ -24,6 +24,7 @@ Updated: 2026-11-09
 - [ ] Phase 3: Independent automated demo execution adapters.
 - [ ] Phase 4: Kronos, six Grok agents and TradingView integrations. (Grok News Agent *contract* and approved role names done in Phase 2; no Grok API integration yet.)
 - [ ] Phase 5: Monitored continuous demo validation.
+- [x] Strategy A shadow forward test launched 2026-11-09 05:55 UTC (local, non-persistent supervisor; forward evidence from 2026-11-16). Monte Carlo validation module implemented (research only).
 
 ---
 
@@ -528,6 +529,39 @@ restart of the XAUUSD runner and is left for operator approval.
 ### Next step
 Monitor both runners (`status`/`report` weekly). Decide on the XAUUSD heartbeat fix. Testnet keys only when Phase 3 is
 authorized. No parameter changes during the evaluations.
+
+---
+
+## Milestone: Strategy A launch + Monte Carlo validation module (2026-11-09)
+Status: **Verified**. No merges, no deployment, no orders, no paid Grok calls, no new scheduled tasks.
+
+**Strategy A** (details in [xau-selective-a-shadow.md](xau-selective-a-shadow.md) section 10):
+- The first memory check failed (≤ 1.07 GB available), so the launch was held.
+- On re-check every check passed, and it was launched from the dedicated checkout. Approval commit `c731b45` (local
+  branch `deploy/xau-selective-a`).
+- 24 books, warm-up 13,037 M5 bars, heartbeats fresh, MT5 read-only, initial-state backup verified.
+- Forward evidence begins 2026-11-16 00:00 UTC.
+- The supervisor is **not** registered as a task, so it stops at reboot or logoff until approved.
+
+**Monte Carlo** (details in [monte-carlo-validation.md](monte-carlo-validation.md); branch
+`research/monte-carlo-validation`):
+- `research/montecarlo/` (records, regimes, sampling, sizing, costs, evidence, engine, CLI), configuration
+  `research/configs/montecarlo_v1.json`.
+- 13 dataset reports, 10,000 seeded scenarios per variant:
+  - 6 complete;
+  - 4 insufficient evidence (1 XAU and 1 BTC holdout below 30 trades, the NY ORB and Donchian forward tests);
+  - Strategy A forward (0 trades);
+  - 2 with no trade records (frozen Donchian and Strategy A history).
+- Regime labels reproduce the source reports exactly.
+- Exact reproducibility verified on real data (1 and 2 workers).
+- Command Center `/montecarlo/` page: read-only, precomputed reports.
+
+**Tests:**
+- `tests/test_montecarlo.py`: 22 tests.
+- Command Center: 31 tests, including the Monte Carlo API.
+- Full suite: see the PR.
+
+**Fix:** the Command Center decision status for Strategy A now uses its own runner heartbeat (`386bca5`, PR #24).
 
 ---
 

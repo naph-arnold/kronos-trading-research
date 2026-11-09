@@ -139,6 +139,12 @@ providers (official/licensed, attributed)        market-specific rules          
 - **Remote access (future, not deployed):** the app stays on `127.0.0.1` behind an authenticating HTTPS reverse
   proxy. See `docs/command-center.md` section 5.
 
+## Monte Carlo validation (research only)
+- `research/montecarlo/` resamples recorded closed trades only, one market, strategy, partition and simulated book per dataset, with provenance hashes and fingerprints. It never reads or writes runner state except through read-only SQLite URIs, never imports execution code and cannot change signals, permissions or risk limits.
+- Adaptive sizing is research only and capped at the 0.5% operational ceiling; results never change the operational sizing policy and cannot override a failed historical validation.
+- Reports are precomputed and versioned; the Command Center serves them read-only and cannot start a simulation.
+  Details: [monte-carlo-validation.md](monte-carlo-validation.md).
+
 ## Strategy boundaries
 - XAUUSD: GoldPilot V1 (trend/pullback), order-block retest, liquidity sweep/structure shift, opening-range breakout — hypotheses until independently verified.
 - BTC/USDT: Kronos-derived signals with trend filter and separate non-AI baselines; previous poor results must not be promoted on unverified AI claims.

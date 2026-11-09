@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "purpose": "Kronos Monte Carlo validation v1 (research only). Datasets are verified closed-trade ledgers; nothing here changes signals, runners, permissions or risk controls.",
+  "output_dir": "research/output/montecarlo/v1",
+  "run": {
+    "seed": 20261109, "scenarios": 10000, "batch_size": 1000, "max_workers": 1, "min_free_memory_mb": 400,
+    "min_trades": 30, "min_months_with_trades": 6, "min_regime_trades": 10, "block_len": 4, "block_lens": [2, 4, 8],
+    "calendar_unit": "month"
+  },
+  "cost_scenarios": {
+    "xauusd": {
+      "recorded": {"kind": "recorded"},
+      "stress": {"kind": "assumed", "contract_size": 100, "extra_spread": 0.20, "extra_slippage": 0.10,
+                 "latency_slippage": 0.05, "extra_commission": 7.0,
+                 "basis": "ASSUMPTION: +0.20 spread (recorded median 0.07, p99 0.33), +0.10 slippage and +0.05 latency per side, +7 USD/lot round-trip commission. Contract size 100 oz from the report's broker specification."}
+    },
+    "btcusdt": {
+      "recorded": {"kind": "recorded"},
+      "stress": {"kind": "assumed", "extra_bps_per_side": 5.0,
+                 "basis": "ASSUMPTION: +5 bp of notional per side (fee tier, slippage and latency) on top of the recorded 0.1% taker fee and slippage."}
+    }
+  },
+  "datasets": [
+    {"market": "xauusd", "strategy": "orb_newyork", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/mt5_xauusd_15m.csv",
+     "note": "Same parameters as the frozen NY ORB forward test (pre-registration phase2c)."},
+    {"market": "xauusd", "strategy": "orb_london", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/mt5_xauusd_15m.csv"},
+    {"market": "xauusd", "strategy": "goldpilot_v1", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/mt5_xauusd_15m.csv"},
+    {"market": "xauusd", "strategy": "order_block_retest", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/mt5_xauusd_15m.csv"},
+    {"market": "xauusd", "strategy": "liquidity_sweep_mss", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/mt5_xauusd_15m.csv"},
+    {"market": "btcusdt", "strategy": "breakout", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_btcusdt.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/binance_btcusdt_1h_2023-11_2026-11.csv",
+     "initial_equity": "10000", "commission": "taker 0.001",
+     "book_parameters_from": "research/configs/phase2_btcusdt.json (initial_equity, taker_fee_rate)",
+     "note": "Volume breakout (lookback 48). NOT the frozen Donchian forward candidate."},
+    {"market": "btcusdt", "strategy": "trend_following", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_btcusdt.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/binance_btcusdt_1h_2023-11_2026-11.csv",
+     "initial_equity": "10000", "commission": "taker 0.001",
+     "book_parameters_from": "research/configs/phase2_btcusdt.json (initial_equity, taker_fee_rate)"},
+    {"market": "btcusdt", "strategy": "kronos_forecast", "source": "phase2_report",
+     "report": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_btcusdt.json",
+     "regime_csv": "C:/Users/Admin/Projects/kronos-trading-research/data/raw/binance_btcusdt_1h_2023-11_2026-11.csv",
+     "initial_equity": "10000", "commission": "taker 0.001",
+     "book_parameters_from": "research/configs/phase2_btcusdt.json (initial_equity, taker_fee_rate)"},
+    {"market": "btcusdt", "strategy": "donchian", "source": "unavailable", "partition": "historical_holdout",
+     "reason": "The Phase 2E research report keeps only summary statistics for the frozen Donchian (lookback 96); no trade-level ledger was retained. Regenerating it requires re-running the walk-forward research (deferred: heavy, and memory headroom is low)."},
+    {"market": "xauusd", "strategy": "selective_a", "source": "unavailable", "partition": "historical_holdout",
+     "reason": "The MTF research report keeps only summary statistics for Strategy A; no trade-level ledger was retained."},
+    {"market": "xauusd", "strategy": "orb_newyork", "source": "shadow_store", "partition": "forward",
+     "db": "C:/Users/Admin/Projects/kronos-trading-research/state/phase2d_shadow/shadow.sqlite",
+     "book": "orb_newyork.e10000.c7", "forward_start": "2026-11-09T00:00:00+00:00"},
+    {"market": "btcusdt", "strategy": "donchian", "source": "shadow_store", "partition": "forward",
+     "db": "C:/Users/Admin/Projects/kronos-binance-shadow/state/phase2e_binance_shadow/shadow.sqlite",
+     "book": "donchian.e10000.f0.002", "forward_start": "2026-11-09T00:00:00+00:00"},
+    {"market": "xauusd", "strategy": "selective_a", "source": "shadow_store", "partition": "forward",
+     "db": "C:/Users/Admin/Projects/kronos-selective-a-shadow/state/xau_selective_a_shadow/shadow.sqlite",
+     "book": "selective_a.e10000.c7", "forward_start": "2026-11-16T00:00:00+00:00"}
+  ]
+}

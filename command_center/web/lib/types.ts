@@ -178,3 +178,44 @@ export interface SignalDetail {
 
 export interface Meta { runners: Record<string, { label: string; market: string }>;
   strategies: { id: string; name: string; market: string; strategy_key: string }[] }
+
+/* ---- Monte Carlo research reports (precomputed; read-only) ---- */
+export type Quantiles = { p5: number; p25: number; p50: number; p75: number; p95: number } | null;
+export interface McIndexRow { id: string; market: string; strategy: string; partition: string; status: string;
+  closed_trades: number | null; file: string; result_sha256?: string }
+export interface McIndex { available: boolean; algorithm?: string; updated_at?: string; reports: McIndexRow[]; note?: string }
+export interface McHist { edges: number[]; counts: number[] }
+export interface McVariant {
+  key: string; group: string; method: string; params: Record<string, string | number>; policy: string; cost: string;
+  scenarios: number; batches: number; ending_equity_usd: Quantiles; net_return_pct: Quantiles; max_drawdown_pct: Quantiles;
+  longest_losing_streak: Quantiles; longest_recovered_spell_trades: Quantiles; censored_spell_trades: Quantiles;
+  time_underwater_pct: Quantiles; trades_per_path: Quantiles; trades_skipped_by_halt_mean: number;
+  probabilities: Record<string, { p: number; mc_se: number }>;
+  mc_standard_error: Record<string, { p50: number | null; p95: number | null; p5: number | null }>;
+  hist: { net_return_pct: McHist; max_drawdown_pct: McHist; losing_streak: number[]; recovered_spell: McHist };
+}
+export interface McCompareRow { p50_return_pct: number; p5_return_pct: number; p95_max_dd_pct: number; p50_max_dd_pct: number;
+  p_dd_ge_5pct: number | null; p_daily_loss_crossed: number }
+export interface McReport {
+  schema_version: number; algorithm: string; market: string; strategy: string; partition: string; status: string;
+  reason?: string; created_at?: string; dataset_fingerprint?: string; config_fingerprint?: string; result_sha256?: string;
+  config?: Record<string, unknown> & { seed?: number; scenarios?: number; cost_scenarios?: Record<string, Record<string, unknown>> };
+  dataset: { provenance: Record<string, unknown>; cost_model?: Record<string, unknown>; book?: Record<string, unknown>;
+    validation?: { status: string; checks: string[] }; regime_source?: Record<string, unknown> | null;
+    selection?: Record<string, unknown> };
+  risk_sizing?: { operational_ceiling: number; daily_loss_halt: number; aggregate_open_risk: number; note: string };
+  evidence: { closed_trades: number; months_with_trades?: number; months_spanned?: number; weeks_with_trades?: number;
+    first_trade?: string; last_trade?: string; mean_r?: number; median_r?: number; sd_r?: number; win_rate_pct?: number;
+    net_r_total?: number; mean_r_ci95?: [number, number];
+    multiple_testing?: { comparisons: number; bonferroni_level: number; mean_r_ci_adjusted: [number, number] | null };
+    dependence?: { n: number; lag1_autocorrelation: number | null; n_eff: number; overlapping_trades: number };
+    concentration?: Record<string, number | null>; regime_coverage?: Record<string, number> | null;
+    sessions?: Record<string, number> };
+  variants: McVariant[];
+  comparisons?: { fixed_vs_adaptive: { method: string; policy: string; fixed: McCompareRow; adaptive: McCompareRow }[];
+    recorded_vs_adverse_costs: { method: string; scenario: string; recorded: McCompareRow; adverse: McCompareRow }[];
+    method_sensitivity: ({ method: string; params: Record<string, string | number> } & McCompareRow)[];
+    regime_conditional: ({ regime: string } & McCompareRow)[] };
+  observed_path_fixed?: Record<string, number | boolean>;
+  limitations?: string[]; resources?: Record<string, number | null>; runtime_s?: number;
+}
