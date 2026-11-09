@@ -1,0 +1,258 @@
+"""Command Center V1: read-only data access, honest candles (recorded or aggregated only), strategy lifecycle,
+overlays and the GET-only API. Synthetic stores in tmp_path; the running runners' files are never touched."""
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal as D
+from pathlib import Path
+
+import pytest
+
+from command_center import services
+from command_center.bars import CsvBars, aggregate, load_candles, parse_time, shadow_bars
+from command_center.readonly import ReadOnlyShadowStore
+from trading.marketdata import Bar
+from trading.shadow.store import ShadowStore
+
+UTC = timezone.utc
+NOW = datetime.now(UTC).replace(second=0, microsecond=0)
+
+
+def _csv(path: Path, start: datetime, n: int, step: int, layout: str = "mt5") -> Path:
+    lines = (["open_time_utc,server_time,open,high,low,close,tick_volume,spread_points"] if layout == "mt5"
+             else ["timestamps,open,high,low,close,volume,amount"])
+    for i in range(n):
+        t = (start + timedelta(seconds=step * i)).isoformat()
+        p = 100 + i
+        lines.append(f"{t},0,{p},{p + 2},{p - 1},{p + 1},10,5" if layout == "mt5"
+                     else f"{t},{p},{p + 2},{p - 1},{p + 1},10,1000")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _store(state: Path, *, heartbeat_age=timedelta(seconds=30), bars_from: datetime | None = None, n_bars: int = 8,
+           interval: str = "15m") -> Path:
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / "shadow.sqlite"
+    s = ShadowStore(path)
+    step = 900 if interval == "15m" else 3600
+    with s.transaction():
+        start = bars_from or (NOW - timedelta(seconds=step * n_bars))
+        start = datetime.fromtimestamp(int(start.timestamp()) // step * step, UTC)  # aligned bars
+        for i in range(n_bars):
+            p = D("2000") + i
+            s.add_bar(Bar.create(symbol="XAUUSD", interval=interval, open_time=start + timedelta(seconds=step * i),
+                                 open=p, high=p + 3, low=p - 3, close=p + 1, volume=D("5")), "live")
+        s.ensure_book("orb_newyork.e10000.c7", "orb_newyork", D("10000"), D("7"))
+        s.ensure_book("orb_newyork.e10000.c0", "orb_newyork", D("10000"), D("0"))
+        s.ensure_book("random_s1.e10000.c7", "random_s1", D("10000"), D("7"))
+        s.heartbeat(NOW - heartbeat_age, runner_status="running", mt5_connection="connected", market_data="fresh",
+                    market_open=True, new_entries="allowed", calendar="broker_verified")
+        s.set_meta("last_tick", f"{(NOW - timedelta(seconds=5)).isoformat()}|2001.5|2001.7")
+    s.close()
+    return path
+
+
+def _cfg(tmp_path: Path, **strategy_a) -> dict:
+    repo = tmp_path / "repo"
+    (repo / "research/configs").mkdir(parents=True, exist_ok=True)
+    risk = {"risk": {"risk_fraction": "0.005", "daily_loss_halt_fraction": "0.015", "aggregate_risk_fraction": "0.01"}}
+    (repo / "research/configs/x.json").write_text(json.dumps(risk))
+    (repo / "research/configs/a.json").write_text(json.dumps({**risk, "launch_approved": False}))
+    hist = tmp_path / "hist"
+    hist.mkdir(exist_ok=True)
+    end = datetime.fromtimestamp(int((NOW - timedelta(hours=10)).timestamp()) // 3600 * 3600, UTC)
+    h15 = _csv(hist / "x15.csv", end - timedelta(minutes=15 * 199), 200, 900)
+    h1 = _csv(hist / "x1h.csv", end - timedelta(hours=199), 200, 3600)
+    return {"health_window_hours": 6, "markets": {"xauusd": {
+        "label": "XAUUSD", "venue": "test", "state_dir": str(tmp_path / "state_x"), "repo": str(repo),
+        "config": "research/configs/x.json", "store_interval": "15m", "volume_label": "tick volume",
+        "history": {"15m": str(h15), "1h": str(h1)}}},
+        "strategies": [
+            {"id": "xau_orb", "name": "ORB", "market": "xauusd", "strategy_key": "orb_newyork",
+             "controls": ["random_s1"]},
+            {"id": "xau_selective_a", "name": "Strategy A", "market": "xauusd", "strategy_key": "selective_a",
+             "controls": ["random"], "state_dir": str(tmp_path / "state_a"), "repo": str(repo),
+             "config": "research/configs/a.json", "store_interval": "5m", **strategy_a}],
+        "grok": {"config": str(tmp_path / "missing.json"), "advisory_dirs": [str(tmp_path / "grok")]}}
+
+
+# --------------------------------------------------------------------------- candles
+
+@pytest.mark.parametrize("layout", ["mt5", "binance"])
+def test_csv_bisection_returns_exact_tail_and_until_windows(tmp_path, layout):
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    src = CsvBars(_csv(tmp_path / "b.csv", start, 5000, 60, layout))
+    tail = src.last(10)
+    assert [b.open for b in tail] == [100 + i for i in range(4990, 5000)] and tail[-1].volume == 10
+    until = start + timedelta(minutes=1234, seconds=30)  # between bars
+    win = src.last(5, until=until)
+    assert win[-1].time == start + timedelta(minutes=1234) and len(win) == 5
+    assert src.last(3, until=start - timedelta(days=1)) == []
+    assert src.span() == (start, start + timedelta(minutes=4999))
+
+
+def test_candles_merge_history_and_live_without_overlap_or_invention(tmp_path):
+    cfg = _cfg(tmp_path)
+    m = cfg["markets"]["xauusd"]
+    # live bars overlap the end of the 15m history (they must not be double counted) and run to now
+    _store(Path(m["state_dir"]), bars_from=NOW - timedelta(hours=11), n_bars=44)
+    out = load_candles(m, "15m", limit=500)
+    times = [c["time"] for c in out["candles"]]
+    assert times == sorted(set(times))  # strictly increasing, no duplicate buckets
+    hist_end = parse_time(out["segments"][0]["to"])
+    assert out["segments"][1]["from"] > out["segments"][0]["to"]
+    assert all(c["source"] == "history" for c in out["candles"] if c["time"] <= hist_end.timestamp())
+    four = load_candles(m, "4h", limit=50)
+    assert all(c["time"] % 14400 == 0 for c in four["candles"]) and any("aggregated" in n for n in four["notes"])
+    one_m = load_candles(m, "1m", limit=50)  # no 1m source and the store is 15m: nothing is fabricated
+    assert one_m["candles"] == [] and "Nothing is displayed rather than invented" in one_m["notes"][0]
+
+
+def test_aggregation_preserves_ohlc_and_flags_forming_bucket():
+    from command_center.bars import Candle
+    t = datetime(2026, 1, 1, tzinfo=UTC)
+    bars = [Candle(t + timedelta(minutes=15 * i), 10 + i, 20 + i, 5 - i, 11 + i, 1.0, "live") for i in range(4)]
+    (one,), partial = aggregate(bars, 3600, 900)
+    assert (one.open, one.high, one.low, one.close, one.volume) == (10, 23, 2, 14, 4.0) and not partial
+
+
+# --------------------------------------------------------------------------- read-only guarantees
+
+def test_read_only_store_refuses_writes_and_leaves_files_byte_identical(tmp_path):
+    db = _store(tmp_path / "state")
+    before = _sha(db)
+    with ReadOnlyShadowStore(db) as s:
+        assert set(s.books()) and s.heartbeats()
+        with pytest.raises(PermissionError):
+            s.event(NOW, "x")
+        with pytest.raises(sqlite3.OperationalError):
+            s._db.execute("DELETE FROM books")
+    cfg = _cfg(tmp_path)
+    cfg["markets"]["xauusd"]["state_dir"] = str(tmp_path / "state")
+    services.overview(cfg)
+    services.chart(cfg, "xauusd", "15m", limit=100)
+    services.signals(cfg, "xau_orb")
+    assert _sha(db) == before and not (tmp_path / "state" / "STOP").exists()
+    assert shadow_bars(tmp_path / "nope.sqlite") == []
+
+
+# --------------------------------------------------------------------------- strategies and status
+
+def test_strategy_a_is_prepared_never_running_without_its_runner(tmp_path):
+    cfg = _cfg(tmp_path)
+    _store(Path(cfg["markets"]["xauusd"]["state_dir"]))
+    panel = services.strategy_panel(cfg, cfg["strategies"][1])
+    assert panel["lifecycle"] == "prepared" and panel["metrics"] is None and panel["launch_approved"] is False
+    assert services.signals(cfg, "xau_selective_a")["available"] is False
+
+
+@pytest.mark.parametrize("setup,expected", [
+    (lambda st: None, "running"), (lambda st: (st / "STOP").write_text(""), "paused"),
+    (lambda st: (st / "KILL").write_text(""), "blocked"),
+    (lambda st: (st / "breaker.json").write_text(json.dumps({"trips": [{"reason": "x"}]})), "blocked"),
+])
+def test_lifecycle_reflects_heartbeats_and_operator_controls(tmp_path, setup, expected):
+    cfg = _cfg(tmp_path)
+    state = Path(cfg["markets"]["xauusd"]["state_dir"])
+    _store(state)
+    setup(state)
+    assert services.strategy_panel(cfg, cfg["strategies"][0])["lifecycle"] == expected
+
+
+def test_stale_heartbeat_is_not_shown_as_running(tmp_path):
+    cfg = _cfg(tmp_path)
+    _store(Path(cfg["markets"]["xauusd"]["state_dir"]), heartbeat_age=timedelta(minutes=30))
+    assert services.strategy_panel(cfg, cfg["strategies"][0])["lifecycle"] == "stopped"
+    assert services.market_status("xauusd", cfg["markets"]["xauusd"])["runner"] == "not responding"
+
+
+def test_metrics_rejections_and_markers_come_from_recorded_simulation(tmp_path):
+    cfg = _cfg(tmp_path)
+    state = Path(cfg["markets"]["xauusd"]["state_dir"])
+    db = _store(state, n_bars=40)
+    close = NOW - timedelta(hours=5)
+    close = close.replace(minute=(close.minute // 15) * 15)
+    s = ShadowStore(db)
+    body = {"side": "long", "entry_price": "2010", "stop_price": "2000", "take_profit": "2030",
+            "provenance": {"context": {"session": "newyork", "range": [2000, 2008]},
+                           "params": {"range_minutes": 30}, "source_bar_open": (close - timedelta(minutes=15)).isoformat()}}
+    with s.transaction():
+        s.record_signal("orb_newyork", "sig1", close, "evaluated", body)
+        s.record_decision("orb_newyork.e10000.c7", "sig1", dedup_key="k", evaluated_at=close, approved=True,
+                          size=D("0.1"), planned_risk=D("50"), reasons=[], context={"equity": "10000"})
+        s.record_decision("orb_newyork.e10000.c0", "sig1", dedup_key="k0", evaluated_at=close, approved=False,
+                          size=None, planned_risk=None, reasons=["Spread 0.9 exceeds max 0.5"], context={})
+        trade = {"book_id": "orb_newyork.e10000.c7", "signal_id": "sig1", "side": "long", "entry": "2010",
+                 "stop": "2000", "take_profit": "2030", "exit": "2030", "opened_at": close.isoformat(),
+                 "closed_at": (close + timedelta(hours=1)).isoformat(), "pnl": "95", "gross_pnl": "100",
+                 "spread_slippage_cost": "1", "commission": "4", "swap": "0", "r_multiple": "1.9",
+                 "planned_risk": "50", "risk_budget": "50", "loss_beyond_planned": "0", "exit_reason": "take_profit"}
+        s.open_position("orb_newyork.e10000.c7", "sig1", {})
+        s.close_position("orb_newyork.e10000.c7", "sig1", close + timedelta(hours=1), D("95"), trade)
+        s.add_equity("orb_newyork.e10000.c7", close + timedelta(hours=1), D("10095"))
+    s.close()
+    panel = services.strategy_panel(cfg, cfg["strategies"][0])
+    m = panel["metrics"]
+    assert panel["primary_book"] == "orb_newyork.e10000.c7"  # higher cost scenario is the headline
+    assert (m["trades"], m["wins"], m["losses"], m["net_pnl"], m["win_rate_pct"]) == (1, 1, 0, 95.0, 100.0)
+    assert panel["rejections"][0]["categories"] == ["spread_limit"] and panel["signals"]["forward"] == 1
+    chart = services.chart(cfg, "xauusd", "15m", limit=200)
+    (sig,) = chart["signals"]
+    assert sig["time"] == int(close.timestamp()) - 900 and sig["decisions"] == {"approved": 1, "rejected": 1}
+    (tr,) = chart["trades"]
+    assert tr["exit_reason"] == "take_profit" and tr["kind"] == "simulated"
+    (rng,) = chart["opening_ranges"] or [None] if chart["opening_ranges"] else [None]
+    if rng is not None:  # 08:20 New York local -> 13:20 UTC (EST) or 12:20 UTC (EDT)
+        start = datetime.fromtimestamp(rng["from"], UTC)
+        assert (start.hour, start.minute) in ((13, 15), (12, 15)) and (rng["low"], rng["high"]) == (2000.0, 2008.0)
+
+
+def test_opening_range_uses_the_strategy_session_definition():
+    sig = {"signal_id": "s", "body": {"provenance": {
+        "context": {"session": "newyork", "range": [1.0, 2.0]}, "params": {"range_minutes": 30},
+        "source_bar_open": "2026-11-05T14:30:00+00:00"}}}
+    rng = services._opening_range(sig, 900)
+    assert datetime.fromtimestamp(rng["from"], UTC) == datetime(2026, 11, 5, 13, 15, tzinfo=UTC)  # floor(13:20)
+    assert datetime.fromtimestamp(rng["to"], UTC) == datetime(2026, 11, 5, 13, 50, tzinfo=UTC)
+    summer = {**sig, "body": {"provenance": {**sig["body"]["provenance"], "source_bar_open": "2026-07-01T14:30:00+00:00"}}}
+    assert datetime.fromtimestamp(services._opening_range(summer, 900)["to"], UTC).hour == 12  # EDT
+
+
+def test_grok_room_reports_not_activated_without_reading_the_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-SECRET")
+    room = services.grok_room(_cfg(tmp_path))
+    assert room["status"] == "not activated" and room["xai_key_present"] is True
+    assert "xai-SECRET" not in json.dumps(room) and len(room["roles"]) == 6 and room["stores"] == []
+
+
+# --------------------------------------------------------------------------- API
+
+def test_api_is_get_only_and_serves_every_view(tmp_path):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from command_center.api import create_app
+    cfg = _cfg(tmp_path)
+    _store(Path(cfg["markets"]["xauusd"]["state_dir"]))
+    path = tmp_path / "cc.json"
+    path.write_text(json.dumps({**cfg, "bind": {"host": "127.0.0.1", "port": 1}}))
+    client = TestClient(create_app(path))
+    for url in ("/api/meta", "/api/overview", "/api/strategies", "/api/strategies/xau_orb/signals",
+                "/api/chart/xauusd?tf=1h&limit=50", "/api/availability/xauusd", "/api/grok"):
+        r = client.get(url)
+        assert r.status_code == 200, url
+        assert r.headers["cache-control"] == "no-store"
+    assert client.get("/api/meta").json()["orders_possible"] is False
+    assert client.get("/api/chart/xauusd?tf=2h").status_code == 400
+    assert client.get("/api/chart/eurusd").status_code == 404
+    for method in ("post", "put", "delete", "patch"):
+        assert getattr(client, method)("/api/overview").status_code == 405

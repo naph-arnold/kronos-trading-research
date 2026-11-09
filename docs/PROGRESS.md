@@ -531,6 +531,37 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Phase 5 — Trading Command Center V1 (2026-11-09)
+Branch `feat/command-center-v1` (worktree `C:\Users\Admin\Projects\kronos-command-center`, stacked on PR #23).
+Status: **Verified** (tests, live read-only smoke test, screenshots). Details: `docs/command-center.md`.
+
+### Built
+- **Backend:** `command_center/` (FastAPI, GET-only, `127.0.0.1:8765`, own venv `.venv-cc`):
+  - read-only SQLite access (`mode=ro`, `query_only`; `ReadOnlyShadowStore` refuses writes);
+  - candles from recorded CSV history plus shadow stores, merged at the seam without double counting, aggregated
+    only from real bars, with provenance and limitation notes;
+  - overview, strategy panels, chart overlays (signals, simulated trades, SL/TP, ORB opening ranges, EMA, swing
+    structure), signal inspection, Grok room.
+  - Reuses `market_health`, `book_metrics`, the ORB session definition and the Grok audit verifier.
+- **Frontend:** `command_center/web/` (Next.js 14 static export, React 18, TypeScript, Tailwind, Lightweight
+  Charts 4.2): Overview, Charts, Strategies and Grok Decision Room. FastAPI serves the static build; no Node
+  process runs.
+- **Start script:** `ops/windows/command_center.ps1`, a foreground process. It is not a task or service.
+
+### Verified
+- `tests/test_command_center.py`: 15 tests (14 run without FastAPI; the API test runs in `.venv-cc` and CI).
+- Full suite: 594 passed, 1 skipped (API test without FastAPI), 8 deselected. Ruff clean on the CI scope, which
+  now includes `command_center`.
+- Live read-only smoke test: all endpoints 200 in ≤ 0.17 s, POST 405, listening on 127.0.0.1 only, 54 MB working
+  set.
+- Strategy A shows `prepared`; the ORB and Donchian panels show `running`. Grok shows `not activated`.
+
+### Limitations stated in the UI
+- Live bars exist only at the runners' intervals (XAU 15m, BTC 1h). Recorded 1m/5m history ends on 2026-11-06
+  (XAU) and 2026-05-31 (BTC).
+- No forward signals or simulated trades yet.
+- The Phase 5 brief was truncated at section 6; the Decision Room is read-only until the rest is specified.
+
 ## Milestone: Strategy A launch preparation and Grok trial readiness (2026-11-09)
 Branch `ops/xau-selective-a-readiness` (PR #23). Status: **Verified** (tests and dry runs). Strategy A **not
 launched**, no task registered. Grok **not activated**, no paid call made.

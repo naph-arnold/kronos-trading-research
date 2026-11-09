@@ -1,0 +1,5 @@
+# Command Center backend only (installed in its own venv, never in the runners' .venv311).
+fastapi==0.115.6
+uvicorn==0.32.1
+# tests (TestClient)
+httpx==0.28.1
