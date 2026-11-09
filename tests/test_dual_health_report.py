@@ -130,3 +130,27 @@ def test_scheduled_tasks_and_power_settings_are_dry_run_by_default():
     assert "Register-ScheduledTask" in tasks.split("if ($Apply)")[1]
     assert "if (-not $Apply)" in power and "DRY RUN" in power and "-Revert" in power
     assert "setdcvalueindex" not in power.lower()  # battery settings untouched
+
+
+def test_optional_third_runner_is_not_started_without_alerts(tmp_path):
+    from research.dual_health_report import DEFAULT_MARKETS, to_markdown
+    assert DEFAULT_MARKETS["xauusd_selective_a"]["optional"] is True
+    assert "kronos-selective-a-shadow" in str(DEFAULT_MARKETS["xauusd_selective_a"]["repo"])
+    markets = {**_markets(tmp_path), "xauusd_selective_a": {"state": tmp_path / "none", "repo": tmp_path,
+                                                            "config": "x.json", "optional": True}}
+    report = build(markets, now=NOW, hours=24)
+    assert report["markets"]["xauusd_selective_a"] == {**report["markets"]["xauusd_selective_a"],
+                                                       "status": "not started", "alerts": []}
+    assert "Not started" in to_markdown(report) and report["markets"]["btcusdt"]["uptime"]["heartbeats"] > 0
+
+
+def test_selective_a_task_is_dry_run_and_gated_on_reviewed_launch_approval():
+    text = _ps("selective_a_task.ps1")
+    assert "if ($Apply)" in text and "DRY RUN" in text and "MultipleInstances IgnoreNew" in text
+    applied = text.split("if ($Apply)")[1].split("} else {")[0]
+    assert applied.index("throw") < applied.index("Register-ScheduledTask")  # checks before registering
+    assert "launch_approved -ne $true" in text and "preregistration_sha256" in text
+    assert "kronos-selective-a-shadow" in text and "-Name xauselectivea" in text
+    assert '"xauselectivea"' in _ps("kronos_supervisor.ps1")
+    for api in ("order_send", "OrderSend", "/api/v3/order"):
+        assert api not in text

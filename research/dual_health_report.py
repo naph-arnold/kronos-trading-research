@@ -22,11 +22,15 @@ from pathlib import Path
 
 GOLD_REPO = Path("C:/Users/Admin/Projects/kronos-trading-research")
 CRYPTO_REPO = Path("C:/Users/Admin/Projects/kronos-binance-shadow")
+SELECTIVE_A_REPO = Path("C:/Users/Admin/Projects/kronos-selective-a-shadow")  # dedicated checkout, created at launch
 DEFAULT_MARKETS = {
     "xauusd": {"state": GOLD_REPO / "state/phase2d_shadow", "repo": GOLD_REPO,
                "config": "research/configs/phase2d_shadow_xauusd.json"},
     "btcusdt": {"state": CRYPTO_REPO / "state/phase2e_binance_shadow", "repo": CRYPTO_REPO,
                 "config": "research/configs/phase2e_binance_shadow.json"},
+    # Optional third runner (XAUUSD Selective Strategy A): reported as "not started" until its state exists.
+    "xauusd_selective_a": {"state": SELECTIVE_A_REPO / "state/xau_selective_a_shadow", "repo": SELECTIVE_A_REPO,
+                           "config": "research/configs/xau_selective_a_shadow.json", "optional": True},
 }
 DISCONNECT_EVENTS = ("data_interruption", "mt5_error", "start_failed", "reconnect", "quote_source", "clock_offset")
 GAP_EVENTS = ("bar_without_ticks", "kline_gap", "kronos_unavailable")
@@ -63,10 +67,14 @@ def _heartbeat_view(detail: dict) -> dict:
     return {"format": "legacy", "connected": None, "fresh": None, "market_open": None, "entries_blocked": None}
 
 
-def market_health(name: str, state: Path, repo: Path, config_rel: str, *, now: datetime, hours: float) -> dict:
+def market_health(name: str, state: Path, repo: Path, config_rel: str, *, now: datetime, hours: float,
+                  optional: bool = False) -> dict:
     state, start = Path(state), now - timedelta(hours=hours)
     out: dict = {"market": name, "state_dir": str(state), "window": [_iso(start), _iso(now)], "alerts": []}
     db_path = state / "shadow.sqlite"
+    if not db_path.exists() and optional:
+        out["status"] = "not started"
+        return out
     if not db_path.exists():
         out["alerts"].append("state database missing")
         return out
@@ -190,7 +198,8 @@ def market_health(name: str, state: Path, repo: Path, config_rel: str, *, now: d
 
 def build(markets: dict, *, now: datetime, hours: float) -> dict:
     report = {"generated_at": _iso(now), "window_hours": hours, "read_only": True, "orders_possible": False,
-              "markets": {name: market_health(name, m["state"], m["repo"], m["config"], now=now, hours=hours)
+              "markets": {name: market_health(name, m["state"], m["repo"], m["config"], now=now, hours=hours,
+                                             optional=m.get("optional", False))
                           for name, m in markets.items()}}
     report["alerts_total"] = sum(len(m["alerts"]) for m in report["markets"].values())
     return report
@@ -201,6 +210,9 @@ def to_markdown(report: dict) -> str:
              f"Read-only. Window: last {report['window_hours']} h. Alerts: {report['alerts_total']}.", ""]
     for name, m in report["markets"].items():
         u = m.get("uptime", {})
+        if m.get("status") == "not started":
+            lines += [f"## {name.upper()}", "", "- Not started (optional runner; no state directory yet)", ""]
+            continue
         lines += [f"## {name.upper()}", "",
                   f"- Runner uptime {u.get('runner_uptime_pct')}% ({u.get('heartbeats')} heartbeats, last "
                   f"{u.get('last_heartbeat_age_min')} min ago); gaps > 3 min: {len(u.get('gaps_over_3_min', []))}",

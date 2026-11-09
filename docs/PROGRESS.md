@@ -531,6 +531,128 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: Strategy A launch preparation and Grok trial readiness (2026-11-09)
+Branch `ops/xau-selective-a-readiness` (PR #23). Status: **Verified** (tests and dry runs). Strategy A **not
+launched**, no task registered. Grok **not activated**, no paid call made.
+
+### Running systems (read-only, not restarted or modified)
+- **XAUUSD NY ORB, 12 h to 01:41 UTC:**
+  - uptime 100%, 721 heartbeats, no gap > 2 min since 23:00;
+  - calendar `broker_verified`; all 4 calendar providers refreshed ok at 01:30;
+  - MT5 account check every 10 min: 3,000 USD, 0 positions, 0 orders, unchanged;
+  - 28 books flat; reconciliation ok hourly; 0 decisions and 0 trades (no NY session yet since the boundary).
+- **BTC/USDT Donchian:**
+  - 1h forward bars recorded; 18 books flat; 0 decisions and 0 trades; pre-registration consistent;
+  - three main-loop heartbeat gaps of 172–196 s (00:37, 00:57, 01:25 UTC). They are not linked to websocket
+    reconnects (count unchanged at 3) and stay under the alert threshold except one at 196 s.
+- **Gold runner termination investigated** (`docs/operations-windows.md` section 1b). The 13:18 UTC kill
+  coincides with Office Click-to-Run Restart Manager sessions (13:17:49–13:19:17). The three later silent
+  supervisor-only exits remain undetermined.
+
+### Added
+- **`research/grok_advisory.py`:**
+  - strict per-role JSON Schema structured outputs;
+  - truncated, refused or empty responses fail;
+  - hard $1.00/day ceiling in code;
+  - `actual_cost_usd` per call;
+  - hash-chained `audit.jsonl` with `verify-audit`;
+  - signal-triggered `review-signals` (candidate strategies, decided signals only, no repeats);
+  - numbers masked in risk reasons.
+- **`research/configs/grok_advisory.json`:**
+  - model `grok-4.20-0309-non-reasoning`;
+  - prices $1.25 / $2.50 per M tokens (docs.x.ai, 2026-11-09);
+  - `daily_usd_budget` 1.0;
+  - trigger config and candidate strategies;
+  - `activated: false`.
+- **`research/state_backup.py`** and tests: online read-only SQLite backup, integrity check, manifest,
+  retention, verification.
+- **`ops/windows/selective_a_task.ps1`:** prepared daily backup task; `-Apply` refuses to overwrite an existing
+  task.
+- **Dedicated Strategy A checkout** `C:\Users\Admin\Projects\kronos-selective-a-shadow` (worktree, branch
+  `deploy/xau-selective-a`). No state directory; nothing running.
+
+### Tests
+- Full suite: 580 passed, 8 deselected; ruff clean on the CI scope.
+- From the dedicated checkout: 28 passed (Strategy A, backup, health report).
+
+### Next action (operator)
+- **Strategy A launch approval**, plus memory steps from `docs/xau-selective-a-shadow.md` section 8.
+- **Grok spending authorisation.**
+- **Optional diagnostics:** Task Scheduler operational log and the Office update window.
+- **Merges** in the planned order.
+
+## Milestone: Strategy A readiness and Grok verification (2026-11-08/09)
+Branch `ops/xau-selective-a-readiness` (stacked on PR #22). Status: **Verified** (preflight and tests); Strategy A
+**not launched**; Grok **not activated**.
+
+### Running systems (read-only, not restarted or modified)
+- **XAUUSD NY ORB (Phase 2D):**
+  - Gold reopened at 23:00 UTC. The clock offset was verified from a fresh tick at 23:01 (UTC+2), and the calendar
+    became `broker_verified`.
+  - Data `fresh` and entries `allowed` from 23:15 UTC.
+  - 28 books flat; demo account unchanged (3,000 USD, 0 positions, 0 orders).
+  - 100% heartbeat uptime over the 6 h before the open.
+  - Bars closing before 2026-11-09 00:00 UTC are labelled warm-up by design; the first forward bar closes at 00:00.
+- **BTC/USDT Donchian (Phase 2E):** 100% uptime over 6 h; WebSocket connected with 0 reconnects; fresh data 100%;
+  18 books flat; pre-registration consistent; no alerts.
+
+### Strategy A preflight (operator-approved one-off; not a launch)
+- **What ran:** `preflight` on a scratch state outside the repository, 23:15:50–23:20:47 UTC, with the gold books
+  flat and before their next bar close.
+- **Connection:** attached to the running terminal with no login arguments. The read-only proxy is active, and all
+  five write-capable MT5 functions are unreachable.
+- **Warm-up:** 12,957 M5 bars; `broker_verified`; 24 books; breaker clear.
+- **Restart:** 0 signal mismatches; reconciled.
+- **Phase 2D during the run:** heartbeats every 60 s, MT5 connected on every beat, no interruption events and no
+  decisions.
+- **Measured:**
+  - warm-up 126 s and restore 168 s;
+  - process working set 110–167 MB, commit 440–494 MB.
+- **Transient:** the ECB calendar fetch timed out once and succeeded 2 minutes later.
+
+### Added
+- **`research/xau_selective_a_shadow.py`:**
+  - `preflight` subcommand (approval flag; refuses runner state directories and non-empty directories, a second
+    Strategy A process and a stale Phase 2D heartbeat);
+  - `StateLock`, one process per state directory;
+  - launch approval through the flag or a reviewed `launch_approved: true` config;
+  - Windows memory measurement.
+- **`ops/windows/selective_a_task.ps1`:** Task Scheduler entry, dry run by default. `-Apply` checks the dedicated
+  checkout, launch approval and the pre-registration hash. It has **not** been registered.
+- **Supervisor:** accepts `-Name xauselectivea`.
+- **`research/dual_health_report.py`:** optional third market, reported as "not started" until its state exists.
+- **`research/grok_advisory.py`:**
+  - daily USD ceiling (worst-case cost per call);
+  - a review starts only if the call budget can cover all 6 calls;
+  - per-call token usage is recorded;
+  - activation needs prices and a ceiling;
+  - `estimate-cost` (offline).
+- **`research/configs/grok_advisory.json`:** `daily_usd_budget` and `pricing_usd_per_million` (null; set at
+  activation).
+
+### Findings
+- **Restart restore is slower than previously stated:** about 13–15 ms per stored M5 bar, so about 18 minutes after
+  a year.
+- **Free RAM fluctuates** (0.89–2.17 GB on 2026-11-08). The largest consumer is WSL (`vmmemWSL`, about 7.5 GB
+  private).
+- **Merge simulation (throwaway worktree):** #9→#13, #15, #16, #21, #22 merges cleanly, because #21 contains the
+  tested resolution. Merging #14 before #15/#16 conflicts in `docs/PROGRESS.md` and `.github/workflows/ci.yml`.
+- **Grok cost:** about 45,900 input tokens per six-call review, so about $0.063–0.069 per review on
+  `grok-4.20-0309-non-reasoning` (list price retrieved 2026-11-09). See `docs/phase4-grok-advisory.md` section 7.
+
+### Tests
+- Full suite: 568 passed, 8 deselected; ruff clean.
+- New and updated tests:
+  - 6 for Strategy A readiness;
+  - 2 for the health report and task script;
+  - 5 for Grok cost and role controls.
+
+### Next action (operator)
+- **Approve the Strategy A launch** by 2026-11-13 21:00 UTC. Steps are in `docs/xau-selective-a-shadow.md`
+  section 6.
+- **Grok activation decision:** model, prices, USD ceiling and key.
+- **Merge decisions.**
+
 ## Milestone: Phase 4.1 — six Grok agents in advisory-only mode (2026-11-09)
 
 Branch `feat/phase4-grok-advisory`, stacked on `feat/xau-selective-a-shadow-prep`. Details:

@@ -22,6 +22,38 @@ auditing. This is a persistent change and needs administrator rights and approva
 `auditpol /set /subcategory:"Process Termination" /success:enable`. Scheduled tasks also record start and stop
 history with result codes.
 
+## 1b. Evidence: second XAUUSD termination (2026-11-08 13:18 UTC) and silent supervisor exits
+Investigated 2026-11-09 with read-only sources only (no system setting changed).
+
+| Evidence (source) | Finding |
+| --- | --- |
+| Shadow store heartbeats | Last 13:18:30 UTC, next 13:30:06 UTC (new supervisor from the 15-minute task trigger): an 11.6-minute gap. Books were flat; restart reconciliation ok; no trade affected. |
+| `supervisor.log` | Supervisor 26408 (started via `Start-ScheduledTask` at 05:55 UTC) has no "runner exited" and no "supervisor exiting" line. Supervisor and runner both ended abruptly; the `finally` block never ran. |
+| Windows PowerShell log | No engine-stop (403) record for any supervisor, so the exits were not graceful |
+| Application log (WER, Application Error) | No crash or hang reports |
+| **Restart Manager** (Application log, events 10000/10001) | Sessions at **13:17:49, 13:18:15 (×2) and 13:19:17 UTC**, the only Restart Manager activity since 2026-11-08 05:00 UTC. They belong to an **Office Click-to-Run update** (MsiInstaller `c2rint.16.msi` at 13:20:19–13:20:25 UTC; Windows Search restarted). |
+| Claude Code session transcript | Idle from 13:10 to 14:02 UTC; no task or process commands |
+| Later supervisor-only exits | Supervisors 38176 (started 13:30 UTC), 16280 (15:30) and 11716 (15:45) were each gone by the next trigger, which can only start when no instance is running (`IgnoreNew`). They left no log line, and there was no Restart Manager activity at those times. The runner started at 13:30 survived and was adopted each time. Supervisor 35508 (16:15 UTC) has run for 9.5+ hours. |
+
+**Conclusions:**
+- **13:18 termination:** it coincides to the minute with the Office update's Restart Manager sessions. This is a
+  correlation, not proof: Restart Manager normally closes only processes holding files being replaced.
+- **05:06 termination (section 1) and the three supervisor-only exits:** no Restart Manager activity, so the
+  cause is undetermined.
+- **Impact:** since the pipe-free runner logs, a supervisor exit no longer stops the runner, and the next trigger
+  adopts it. Only the 13:18 incident stopped a runner.
+
+**Nonintrusive next steps (each needs approval, none applied):**
+1. Enable the Task Scheduler operational log (`wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`)
+   to record why task instances end.
+2. Process-termination auditing (section 1).
+3. Set Office updates to a window outside 13:00–21:00 UTC, or defer them.
+4. Later, with a redeploy of the gold checkout: a periodic "supervisor alive" line in `supervisor.log`.
+
+**Operational caution:** registering an existing task again (`Register-ScheduledTask -Force`, `Set-ScheduledTask`)
+ends its running instance and the process tree it started. Never re-register a runner task while it runs.
+`selective_a_task.ps1 -Apply` refuses to overwrite an existing task.
+
 ## 2. Evidence: sleep (Modern Standby) is the main cause of "broker disconnections"
 - `powercfg /a`: only *Standby (S0 Low Power Idle) Network Connected* and Hibernate are available.
 - The plan is Balanced with AC display-off 180 s and AC sleep 180 s.
