@@ -895,6 +895,9 @@ def _sensitive_roots(cfg: dict) -> list[tuple[str, str]]:
                 roots.append((s[key], f"<{s['id']} {key}>"))
     g = cfg.get("grok", {})
     roots += [(d, "<advisory store>") for d in g.get("advisory_dirs", [])]
+    acc = cfg.get("account") or {}
+    roots += [(acc[k], f"<{k}>") for k in ("mt5_state_dir", "execution_state_dir") if acc.get(k)]
+    roots += [(r["file"], "<research report>") for r in acc.get("historical_reports", [])]
     if (cfg.get("montecarlo") or {}).get("reports_dir"):
         roots.append((cfg["montecarlo"]["reports_dir"], "<montecarlo reports>"))
     if g.get("config"):

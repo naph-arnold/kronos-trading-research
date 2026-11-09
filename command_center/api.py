@@ -154,6 +154,14 @@ def create_app(config_path: Path | None = None) -> FastAPI:
     def grok():
         return cached("grok", 10, lambda: services.grok_room(cfg))
 
+    # Scalping & account performance: four separate modes, read-only (no order or control path).
+    @app.get("/api/account/{mode}")
+    def account(mode: str, strategy: str | None = None):
+        from command_center.account import account_view
+        if mode not in ("historical", "shadow", "broker", "live"):
+            raise HTTPException(404, "unknown account mode")
+        return cached(("account", mode, strategy), 10, lambda: account_view(cfg, mode, strategy))
+
     # Monte Carlo research: precomputed, versioned reports only. No request can start a simulation.
     @app.get("/api/montecarlo")
     def montecarlo_index():

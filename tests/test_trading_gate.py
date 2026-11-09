@@ -168,9 +168,18 @@ def test_trading_package_contains_no_order_routing():
                  'method="POST"', 'method="DELETE"', "import requests", "import httpx", "import ccxt")
     files = sorted((ROOT / "trading").rglob("*.py"))
     assert any(p.parent.name == "connectors" for p in files)
+    # The single authorized exception (operator, 2026-11-09): the approval-gated MT5 DEMO adapter. It may contain
+    # order_check/order_send, but nothing else on the list, never imports MetaTrader5 itself (the module is
+    # injected), and sends through exactly two sites: the guarded proxy and the gated submit.
+    demo_adapter = ROOT / "trading" / "execution" / "mt5_demo.py"
     for path in files:
         source = path.read_text(encoding="utf-8")
         ast.parse(source)
+        if path == demo_adapter:
+            assert not any(t in source for t in forbidden if t not in ("order_send", "order_check")), path
+            assert source.count("order_send(") == 2 and "import MetaTrader5" not in source
+            assert "verify_mt5_demo_account(_as_dict(self._module.account_info())" in source  # demo re-check per send
+            continue
         assert not any(token in source for token in forbidden), path
         if path.name != "mt5.py" or path.parent.name != "connectors":
             assert "import MetaTrader5" not in source, path

@@ -532,6 +532,46 @@ authorized. No parameter changes during the evaluations.
 
 ---
 
+## Milestone: MT5 demo execution adapter, account performance dashboard, scalping status (2026-11-09)
+Branch `feat/mt5-demo-execution-account-dashboard`, stacked on PR #25. Status: **Verified**, with no order
+submitted.
+
+**Built:**
+- `trading/accounting.py`: deals to positions; cash flows kept separate; costs; performance; closed-trade drawdown.
+- `trading/execution/mt5_demo.py`: the approval-gated demo adapter.
+- `research/mt5_account_monitor.py`: the read-only account recorder.
+- `command_center/account.py` and the `/account/` page.
+- `research/xau_scalping_cost_floor.py`: the descriptive cost floor.
+
+**Real data:** one read-only snapshot of the MetaQuotes-Demo account.
+- Balance and equity 3,000 USD; margin 0; 0 positions.
+- 1 deal: the deposit, counted as a cash flow.
+- The balance reconciles with the deals.
+- The terminal's Algo Trading switch is off.
+
+**Scalping:**
+- No configuration is profitable. The rejected 2019–2020 results stand.
+- Cost floor:
+
+  | Period | 1-min ATR | Cost at a 1-ATR stop |
+  | --- | --- | --- |
+  | 2019–2020 | 0.39 | 1.05–1.23 R |
+  | 2025–2026 | 1.75 | 0.19–0.23 R |
+
+- The signals still showed no gross edge on unexamined data. See
+  [xau-scalping-research-status.md](xau-scalping-research-status.md).
+
+**Tests:**
+- `test_accounting.py` (6), `test_mt5_demo_execution.py` (15), `test_account_dashboard.py` (6).
+- Command Center tests still pass. Full suite: see the PR.
+
+**Pending approvals:**
+- a demo execution trial;
+- continuous running of the account monitor;
+- a new scalping hypothesis and its independent data (MT5 Max bars change or a forward shadow test).
+
+---
+
 ## Milestone: Strategy A launch + Monte Carlo validation module (2026-11-09)
 Status: **Verified**. No merges, no deployment, no orders, no paid Grok calls, no new scheduled tasks.
 

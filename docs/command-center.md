@@ -260,6 +260,15 @@ How it stays read-only:
 - Report ids are allow-listed by pattern, paths are scrubbed, and responses are cached for 60 s.
 - The dashboard never imports the simulation engine.
 
+## 8.3 Scalping & account performance (`/account/`)
+There are four separate modes: MT5 demo broker, shadow forward test, historical research and real money (future,
+disabled). Details are in [account-performance.md](account-performance.md).
+
+- Broker figures come only from the read-only account recorder and the runners' account checks. They show
+  unavailable, disconnected or stale instead of zero.
+- Cash flows are separate from trading profit. Demo funds are labelled not withdrawable.
+- Trade rows expand to show entry, exit, stop, target, costs, risk and the reason the trade was taken.
+
 ## 9. Not in V1 (future versions)
 - Controls (STOP/KILL buttons, runner start/stop, agent activation). These need a separate authenticated,
   audited design and approval.

@@ -52,6 +52,15 @@
      "repo": "C:/Users/Admin/Projects/kronos-selective-a-shadow",
      "config": "research/configs/xau_selective_a_shadow.json", "store_interval": "5m"}
   ],
+  "account": {
+    "mt5_state_dir": "C:/Users/Admin/Projects/kronos-execution/state/mt5_account",
+    "execution_state_dir": "C:/Users/Admin/Projects/kronos-execution/state/mt5_demo_execution",
+    "strategy_by_magic": {},
+    "historical_reports": [
+      {"market": "xauusd", "file": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_xauusd_metaquotes_demo.json", "timeframe": "15m"},
+      {"market": "btcusdt", "file": "C:/Users/Admin/Projects/kronos-trading-research/research/output/phase2_btcusdt.json", "timeframe": "1h", "initial_equity": "10000"}
+    ]
+  },
   "montecarlo": {"reports_dir": "C:/Users/Admin/Projects/kronos-montecarlo/research/output/montecarlo/v1/reports"},
   "grok": {
     "config": "C:/Users/Admin/Projects/kronos-command-center/research/configs/grok_advisory.json",
