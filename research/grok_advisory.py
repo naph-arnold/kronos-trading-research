@@ -17,6 +17,8 @@ Without them the `xai` transport raises GrokNotActivated. `dry-run` makes no cal
 as unavailable -> Coordinator fallback `insufficient_inputs`); `replay` uses recorded JSON responses.
 
 Usage: python -m research.grok_advisory review --db <shadow.sqlite> --runner xau_orb [--signal-id ID | --latest N]
+       python -m research.grok_advisory review-signals [--runner R]   (new candidate signals only; the trigger)
+       python -m research.grok_advisory verify-audit
        python -m research.grok_advisory status
        python -m research.grok_advisory estimate-cost [--runner xau_orb --db <shadow.sqlite>]   (offline)
 """
@@ -26,22 +28,26 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from trading.agents.desk import (PROVIDER, ROLE_BRIEFS, SPECIALISTS, AdvisoryContext, RoleOutput,
-                                 deterministic_coordinator_fallback, output_schema, parse_role_output)
+from trading.agents.desk import (COORDINATOR_RECOMMENDATIONS, PROVIDER, RECOMMENDATIONS, ROLE_BRIEFS, SPECIALISTS,
+                                 AdvisoryContext, RoleOutput, deterministic_coordinator_fallback, output_schema,
+                                 parse_role_output)
 from trading.agents.mtf_advisory import OFFICIAL_XAI_BASE_URL, GrokNotActivated
 from trading.agents.news import ALLOWED_KEYS as NEWS_KEYS
+from trading.agents.news import RECOMMENDATIONS as NEWS_RECOMMENDATIONS
 from trading.agents.news import parse_news_assessment
 from trading.common import ValidationError
 
 DEFAULT_CONFIG = "research/configs/grok_advisory.json"
+HARD_DAILY_USD_CEILING = 1.00  # operator instruction 2026-11-09: hard API spending ceiling of $1 per day
 CHAT_PATH = "/v1/chat/completions"  # OpenAI-compatible endpoint of the official xAI API (verify at activation)
 
 
@@ -93,7 +99,8 @@ class XaiTransport:
         if not key:
             raise GrokNotActivated(f"{self.key_env} is not set")
         body = {"model": self.model, "temperature": 0, "max_tokens": self.max_tokens,
-                "response_format": {"type": "json_object"},
+                "response_format": {"type": "json_schema", "json_schema": {
+                    "name": f"kronos_advisory_{role}", "schema": role_json_schema(role), "strict": True}},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         req = urllib.request.Request(self.base_url + CHAT_PATH, data=json.dumps(body).encode(), method="POST",
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
@@ -106,9 +113,72 @@ class XaiTransport:
         self.last_usage = ({k: v for k, v in usage.items() if isinstance(v, (int, float))}
                            if isinstance(usage, dict) else None)
         try:
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice["message"]
+            content = message["content"]
         except (KeyError, IndexError, TypeError):
             raise GrokNotActivated("xAI response missing choices[0].message.content") from None
+        # Incomplete answers are failures, never partial advice: truncated (max_tokens), refused or empty.
+        finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+        if finish not in (None, "stop"):
+            raise GrokNotActivated(f"xAI response incomplete (finish_reason={finish!r})")
+        if isinstance(message, dict) and message.get("refusal"):
+            raise GrokNotActivated("xAI response was a refusal")
+        if not isinstance(content, str) or not content.strip():
+            raise GrokNotActivated("xAI response content is empty")
+        return content
+
+
+_TEXTS = {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+_CONFIDENCE = {"type": "number", "minimum": 0, "maximum": 1}
+_MINUTES = {"type": "integer", "minimum": 1, "maximum": 240}
+
+
+def role_json_schema(role: str) -> dict:
+    """Strict JSON Schema sent as xAI `response_format` (structured outputs). It mirrors the local validators in
+    `trading.agents.desk` / `trading.agents.news`, which remain authoritative: every response is validated again
+    locally (evidence ids, timestamps, price range, forbidden keys), whatever the API guarantees."""
+    if role == "news":
+        props = {
+            "schema_version": {"type": "integer", "enum": [1]}, "role": {"type": "string", "enum": ["news"]},
+            "provider": {"type": "string", "enum": [PROVIDER]}, "model": {"type": "string", "maxLength": 100},
+            "assessed_at": {"type": "string", "format": "date-time"},
+            "markets": {"type": "array", "minItems": 1, "maxItems": 2,
+                        "items": {"type": "string", "enum": ["xauusd_mt5", "btcusdt_binance_spot"]}},
+            "event_ids": _TEXTS,
+            "headlines": {"type": "array", "maxItems": 20, "items": {
+                "type": "object", "additionalProperties": False, "required": ["title", "url", "published_at"],
+                "properties": {"title": {"type": "string", "maxLength": 500}, "url": {"type": "string"},
+                               "published_at": {"type": "string"}}}},
+            "interpretation": {"type": "string", "minLength": 1, "maxLength": 4000},
+            "implications": {"type": "object", "additionalProperties": False, "properties": {
+                "xauusd_mt5": {"type": "string", "maxLength": 1000},
+                "btcusdt_binance_spot": {"type": "string", "maxLength": 1000}}},
+            "geopolitical_risks": _TEXTS, "abnormal_conditions": _TEXTS, "conflicts": _TEXTS,
+            "confidence": _CONFIDENCE, "recommendation": {"type": "string", "enum": list(NEWS_RECOMMENDATIONS)},
+            "valid_for_minutes": _MINUTES}
+        return {"type": "object", "additionalProperties": False, "properties": props, "required": sorted(props)}
+    recs = COORDINATOR_RECOMMENDATIONS if role == "coordinator" else RECOMMENDATIONS
+    props = {
+        "schema_version": {"type": "integer", "enum": [1]}, "role": {"type": "string", "enum": [role]},
+        "provider": {"type": "string", "enum": [PROVIDER]}, "model": {"type": "string", "maxLength": 100},
+        "assessed_at": {"type": "string", "format": "date-time"},
+        "subject": {"type": "object", "additionalProperties": False, "required": ["kind", "id"],
+                    "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}},
+        "assessment": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "evidence": _TEXTS, "concerns": _TEXTS, "confidence": _CONFIDENCE,
+        "recommendation": {"type": "string", "enum": list(recs)}, "valid_for_minutes": _MINUTES}
+    required = sorted(props)
+    if role == "chart":
+        props["levels"] = {"type": "array", "maxItems": 10, "items": {"type": "number"}}  # optional
+    if role == "kronos_analyst":
+        props["kronos_forecast_id"] = {"type": ["string", "null"]}
+        required.append("kronos_forecast_id")
+    if role == "coordinator":
+        props["role_inputs"] = {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": list(SPECIALISTS)}}
+        props["disagreements"] = _TEXTS
+        required += ["role_inputs", "disagreements"]
+    return {"type": "object", "additionalProperties": False, "properties": props, "required": sorted(required)}
 
 
 def make_transport(config: dict, kind: str, *, approved: bool, env=os.environ, replay: dict | None = None):
@@ -126,8 +196,62 @@ def make_transport(config: dict, kind: str, *, approved: bool, env=os.environ, r
             isinstance(config.get("daily_usd_budget"), (int, float)) and config["daily_usd_budget"] > 0):
         raise GrokNotActivated("xAI pricing (input/output USD per million tokens, from docs.x.ai) and a positive "
                                "daily_usd_budget must be set before activation")
+    if config["daily_usd_budget"] > HARD_DAILY_USD_CEILING:
+        raise GrokNotActivated(f"daily_usd_budget exceeds the operator-approved hard ceiling of "
+                               f"${HARD_DAILY_USD_CEILING:.2f}/day (raising it needs a reviewed code change)")
     return XaiTransport(model=config.get("model") or "", base_url=config["base_url"],
                         timeout_s=config["timeout_s"], max_tokens=config["max_tokens"])
+
+
+# --------------------------------------------------------------------------- independent audit log
+
+class AuditLog:
+    """Append-only JSONL audit trail, independent of the SQLite store: one line per call, validated output and
+    summary, each carrying the SHA-256 of the previous line (hash chain), so deletions, edits or reordering are
+    detectable with `verify-audit`. It records hashes, status, costs and token usage - never prompts, raw responses
+    or credentials (the key never reaches this module's records)."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._prev, self._seq = "0" * 64, 0
+        if self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    rec = json.loads(line)
+                    self._prev, self._seq = rec["sha256"], rec["seq"]
+
+    @staticmethod
+    def _digest(record: dict) -> str:
+        body = {k: v for k, v in record.items() if k != "sha256"}
+        return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+    def append(self, kind: str, **fields) -> None:
+        record = {"seq": self._seq + 1, "kind": kind, "logged_at": datetime.now(timezone.utc).isoformat(),
+                  "prev_sha256": self._prev, **fields}
+        record["sha256"] = self._digest(record)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        self._prev, self._seq = record["sha256"], record["seq"]
+
+    @classmethod
+    def verify(cls, path: Path) -> dict:
+        prev, seq, counts, problems = "0" * 64, 0, {}, []
+        lines = Path(path).read_text(encoding="utf-8").splitlines() if Path(path).exists() else []
+        for n, line in enumerate(lines, 1):
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                problems.append(f"line {n}: not JSON")
+                break
+            if rec.get("seq") != seq + 1 or rec.get("prev_sha256") != prev or rec.get("sha256") != cls._digest(rec):
+                problems.append(f"line {n}: chain broken (seq {rec.get('seq')})")
+                break
+            prev, seq = rec["sha256"], rec["seq"]
+            counts[rec["kind"]] = counts.get(rec["kind"], 0) + 1
+        return {"ok": not problems, "records": seq, "by_kind": counts, "problems": problems}
 
 
 # --------------------------------------------------------------------------- advisory store (separate)
@@ -137,20 +261,21 @@ class AdvisoryStore:
         "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, role TEXT NOT NULL,"
         " subject TEXT NOT NULL, transport TEXT NOT NULL, model TEXT, context_sha256 TEXT NOT NULL,"
         " prompt_sha256 TEXT NOT NULL, response_sha256 TEXT, status TEXT NOT NULL, error TEXT,"
-        " est_cost_usd REAL, usage TEXT)",
+        " est_cost_usd REAL, usage TEXT, actual_cost_usd REAL)",
         "CREATE TABLE IF NOT EXISTS outputs (subject TEXT NOT NULL, role TEXT NOT NULL, at TEXT NOT NULL,"
         " valid INTEGER NOT NULL, payload TEXT, error TEXT, PRIMARY KEY (subject, role, at))",
         "CREATE TABLE IF NOT EXISTS summaries (subject TEXT NOT NULL, at TEXT NOT NULL, runner TEXT NOT NULL,"
         " context_sha256 TEXT NOT NULL, recommendation TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (subject, at))",
     )
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, audit: AuditLog | None = None):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.audit = audit if audit is not None else AuditLog(Path(path).parent / "audit.jsonl")
         self.db = sqlite3.connect(str(path))
         for stmt in self.SCHEMA:
             self.db.execute(stmt)
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(calls)")}
-        for column, kind in (("est_cost_usd", "REAL"), ("usage", "TEXT")):  # stores created before cost tracking
+        for column, kind in (("est_cost_usd", "REAL"), ("usage", "TEXT"), ("actual_cost_usd", "REAL")):  # stores created before cost tracking
             if column not in columns:
                 self.db.execute(f"ALTER TABLE calls ADD COLUMN {column} {kind}")
         self.db.commit()
@@ -164,25 +289,40 @@ class AdvisoryStore:
                                (since.isoformat(), transport)).fetchone()[0]
 
     def call(self, **row) -> None:
-        row = {"est_cost_usd": None, "usage": None, **row}
+        row = {"est_cost_usd": None, "usage": None, "actual_cost_usd": None, **row}
         if isinstance(row["usage"], dict):
             row["usage"] = json.dumps(row["usage"], sort_keys=True)
         self.db.execute("INSERT INTO calls (at, role, subject, transport, model, context_sha256, prompt_sha256,"
-                        " response_sha256, status, error, est_cost_usd, usage) VALUES (:at, :role, :subject,"
+                        " response_sha256, status, error, est_cost_usd, usage, actual_cost_usd) VALUES (:at, :role, :subject,"
                         " :transport, :model, :context_sha256, :prompt_sha256, :response_sha256, :status, :error,"
-                        " :est_cost_usd, :usage)", row)
+                        " :est_cost_usd, :usage, :actual_cost_usd)", row)
         self.db.commit()
+        self.audit.append("call", **{k: row[k] for k in (
+            "at", "role", "subject", "transport", "model", "context_sha256", "prompt_sha256", "response_sha256",
+            "status", "error", "est_cost_usd", "actual_cost_usd", "usage")})
 
     def output(self, subject: str, role: str, at: str, valid: bool, payload, error: str | None) -> None:
+        text = None if payload is None else json.dumps(payload, default=str)
         self.db.execute("INSERT OR REPLACE INTO outputs VALUES (?, ?, ?, ?, ?, ?)",
-                        (subject, role, at, int(valid), None if payload is None else json.dumps(payload, default=str),
-                         error))
+                        (subject, role, at, int(valid), text, error))
         self.db.commit()
+        self.audit.append("output", at=at, subject=subject, role=role, valid=bool(valid), error=error,
+                          payload_sha256=None if text is None else hashlib.sha256(text.encode()).hexdigest())
 
     def summary(self, subject: str, at: str, runner: str, context_sha: str, body: dict) -> None:
+        text = json.dumps(body, default=str)
         self.db.execute("INSERT OR REPLACE INTO summaries VALUES (?, ?, ?, ?, ?, ?)",
-                        (subject, at, runner, context_sha, body["recommendation"], json.dumps(body, default=str)))
+                        (subject, at, runner, context_sha, body["recommendation"], text))
         self.db.commit()
+        self.audit.append("summary", at=at, subject=subject, runner=runner, context_sha256=context_sha,
+                          recommendation=body["recommendation"], source=body.get("source"),
+                          skipped=body.get("skipped"), errors=sorted(body.get("errors", {})),
+                          body_sha256=hashlib.sha256(text.encode()).hexdigest())
+
+    def reviewed(self, subject: str, transport: str) -> bool:
+        """A subject counts as reviewed once any call was recorded for it with this transport."""
+        return self.db.execute("SELECT 1 FROM calls WHERE subject = ? AND transport = ? LIMIT 1",
+                               (subject, transport)).fetchone() is not None
 
     def counts(self) -> dict:
         q = self.db.execute
@@ -213,6 +353,43 @@ def recent_signals(db: Path, *, limit: int = 5, signal_id: str | None = None) ->
             for r in rows]
 
 
+_NUMBER = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?(?:[eE][-+]?\d+)?%?")
+
+
+def sanitize_reason(reason) -> str:
+    """Risk-engine reasons can quote limits and sizes ("Spread 0.6 exceeds max 0.5", "Margin ... exceeds 0.3 of
+    free margin"). The agents get the reason category only: every number is masked, so no risk limit, size,
+    equity or strategy parameter reaches a prompt."""
+    return _NUMBER.sub("#", str(reason))[:200]
+
+
+# Signal statuses written by trading.shadow.engine: warmup (before the forward boundary), rejected_unanchored,
+# pending (awaiting the deterministic decision), evaluated (decided by the risk engine), expired (latency guard).
+REVIEWABLE_STATUSES = ("evaluated",)
+
+
+def candidate_signals(db: Path, *, strategies: list[str], since: datetime) -> list[dict]:
+    """Forward signals of the runner's CANDIDATE strategies (never random controls or warm-up), already decided by
+    the deterministic risk engine, with bar_close >= since. Read-only."""
+    if not strategies:
+        return []
+    con = _ro(db)
+    try:
+        smarks, kmarks = ",".join("?" * len(REVIEWABLE_STATUSES)), ",".join("?" * len(strategies))
+        rows = con.execute(f"SELECT strategy_key, signal_id, bar_close, status, body FROM signals WHERE status IN "
+                           f"({smarks}) AND strategy_key IN ({kmarks}) ORDER BY bar_close",
+                           (*REVIEWABLE_STATUSES, *strategies)).fetchall()
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        close = datetime.fromisoformat(str(r[2]).replace("Z", "+00:00"))
+        if close >= since:
+            out.append({"strategy_key": r[0], "signal_id": r[1], "bar_close": r[2], "status": r[3],
+                        "body": json.loads(r[4])})
+    return out
+
+
 def signal_context(db: Path, signal: dict, *, runner: str, market: str, now: datetime, bars: int = 96,
                    kronos: dict | None = None) -> AdvisoryContext:
     """Facts available at the signal's bar close only (no later bars), plus the frozen decisions taken on it."""
@@ -227,7 +404,7 @@ def signal_context(db: Path, signal: dict, *, runner: str, market: str, now: dat
     bar_facts = [{"id": f"bar:{r[0]}", "open_time": r[0], "o": float(r[1]), "h": float(r[2]), "l": float(r[3]),
                   "c": float(r[4]), "interval": r[5]} for r in rows]
     decision_facts = [{"id": f"decision:{d[0]}:{signal['signal_id']}", "book": d[0], "approved": bool(d[1]),
-                       "reasons": json.loads(d[2])} for d in decisions]
+                       "reasons": [sanitize_reason(r) for r in json.loads(d[2])]} for d in decisions]
     body = signal["body"]
     sig_fact = {"id": f"signal:{signal['signal_id']}", "strategy_key": signal["strategy_key"], "side": body.get("side"),
                 "bar_close": signal["bar_close"], "status": signal["status"],
@@ -309,6 +486,7 @@ def run_desk(context: AdvisoryContext, transport, store: AdvisoryStore, *, runne
     Coordinator falls back to `insufficient_inputs`. Returns the recorded summary (advisory only)."""
     context_sha = context.digest()
     at = now.isoformat()
+    daily_usd_budget = min(daily_usd_budget, HARD_DAILY_USD_CEILING)
     valid: dict[str, RoleOutput] = {}
     errors: dict[str, str] = {}
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -351,8 +529,11 @@ def run_desk(context: AdvisoryContext, transport, store: AdvisoryStore, *, runne
         usage = getattr(transport, "last_usage", None)
         if paid and usage and pricing is not None:
             row["usage"] = usage
-            row["est_cost_usd"] = max(row["est_cost_usd"] or 0.0, call_cost_usd(
-                int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)), pricing))
+            # actual = billed tokens at list price (cached-input discounts ignored, so never under-counted);
+            # the guard keeps the larger of the worst-case reservation and the actual cost
+            row["actual_cost_usd"] = call_cost_usd(int(usage.get("prompt_tokens", 0)),
+                                                   int(usage.get("completion_tokens", 0)), pricing)
+            row["est_cost_usd"] = max(row["est_cost_usd"] or 0.0, row["actual_cost_usd"])
         store.call(**row)
         try:
             return json.loads(text), None
@@ -424,6 +605,92 @@ def cmd_review(args) -> dict:
             events._db.close()
     return {"transport": transport.name, "reviewed": len(out),
             "recommendations": [s["recommendation"] for s in out], "store": store.counts()}
+
+
+def review_new_signals(config: dict, transport, store: AdvisoryStore, *, now: datetime, runners: list[str],
+                       kronos: dict | None = None, db_overrides: dict | None = None) -> dict:
+    """Signal-triggered reviews (no continuous polling of the API): reads each runner's shadow store read-only,
+    selects forward signals of its candidate strategies that the risk engine has already decided, skips those
+    already reviewed with this transport or older than `max_signal_age_hours`, and reviews at most
+    `max_reviews_per_run`. With no new signal, no AI call is made."""
+    trigger = config.get("review_trigger") or {}
+    max_age = float(trigger.get("max_signal_age_hours", 6))
+    budget_left = int(trigger.get("max_reviews_per_run", 3))
+    since = now - timedelta(hours=max_age)
+    report = {"transport": transport.name, "runners": {}, "reviewed": 0, "recommendations": []}
+    for name in runners:
+        runner = config["runners"][name]
+        db = Path((db_overrides or {}).get(name) or runner["shadow_db"])
+        entry = {"candidates": runner.get("candidate_strategies", []), "new": 0, "already_reviewed": 0,
+                 "deferred": 0}
+        if not db.exists():
+            entry["status"] = "no shadow store (runner not started)"
+            report["runners"][name] = entry
+            continue
+        todo = []
+        for sig in candidate_signals(db, strategies=entry["candidates"], since=since):
+            subject = f"{name}:{sig['signal_id']}"
+            if store.reviewed(subject, transport.name):
+                entry["already_reviewed"] += 1
+            else:
+                todo.append(sig)
+        entry["new"] = len(todo)
+        with tempfile.TemporaryDirectory() as tmp:
+            cal = runner.get("calendar_db")
+            events = calendar_snapshot(Path(cal), Path(tmp)) if todo and cal and Path(cal).exists() else None
+            try:
+                for sig in todo:
+                    if budget_left <= 0:
+                        entry["deferred"] += 1
+                        continue
+                    budget_left -= 1
+                    ctx = signal_context(db, sig, runner=name, market=runner["market"], now=now, kronos=kronos)
+                    summary = run_desk(ctx, transport, store, runner=name, now=now, model=config.get("model"),
+                                       event_store=events, daily_call_budget=config["daily_call_budget"],
+                                       daily_usd_budget=float(config.get("daily_usd_budget") or 0),
+                                       pricing=config.get("pricing_usd_per_million"))
+                    report["reviewed"] += 1
+                    report["recommendations"].append({"subject": ctx.subject_id,
+                                                      "recommendation": summary["recommendation"]})
+            finally:
+                if events is not None:
+                    events._db.close()
+        report["runners"][name] = entry
+    return report
+
+
+def cmd_review_signals(args) -> dict:
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    transport = make_transport(config, args.transport, approved=args.i_have_activation_approval)
+    store = AdvisoryStore(Path(args.advisory_dir or config["advisory_dir"]) / "advisory.sqlite")
+    kronos = json.loads(Path(args.kronos_file).read_text(encoding="utf-8")) if args.kronos_file else None
+    runners = [args.runner] if args.runner else sorted(config["runners"])
+    overrides = dict(item.split("=", 1) for item in (args.db or []))
+    unknown = set(overrides) - set(config["runners"])
+    if unknown:
+        raise SystemExit(f"--db names unknown runners: {sorted(unknown)}")
+    out = review_new_signals(config, transport, store, now=datetime.now(timezone.utc), runners=runners,
+                             kronos=kronos, db_overrides=overrides)
+    out["store"] = store.counts()
+    return out
+
+
+def cmd_verify_audit(args) -> dict:
+    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    base = Path(args.advisory_dir or config["advisory_dir"])
+    result = AuditLog.verify(base / "audit.jsonl")
+    db = base / "advisory.sqlite"
+    if db.exists():  # cross-check: every SQLite call row must have its audit line
+        con = _ro(db)
+        try:
+            calls = con.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
+        finally:
+            con.close()
+        result["sqlite_calls"] = calls
+        if result["by_kind"].get("call", 0) != calls:
+            result["ok"] = False
+            result["problems"].append(f"audit has {result['by_kind'].get('call', 0)} call records, store has {calls}")
+    return result
 
 
 def representative_context(db: Path | None, *, runner: str, market: str, now: datetime, bars: int = 96):
@@ -535,7 +802,17 @@ def main() -> None:
     e.add_argument("--runner", default="xau_orb")
     e.add_argument("--db", default=None, help="shadow.sqlite to size the context from (read-only)")
     e.set_defaults(func=cmd_estimate_cost)
-    for q in (p, s, e):
+    r = sub.add_parser("review-signals", help="review NEW candidate-strategy signals only (signal-triggered)")
+    r.add_argument("--runner", default=None, help="one runner; default all configured runners")
+    r.add_argument("--transport", choices=("dry-run", "xai"), default="dry-run")
+    r.add_argument("--kronos-file", default=None)
+    r.add_argument("--db", action="append", metavar="RUNNER=PATH",
+                   help="shadow.sqlite of a runner in another checkout (opened read-only); repeatable")
+    r.add_argument("--i-have-activation-approval", action="store_true")
+    r.set_defaults(func=cmd_review_signals)
+    v = sub.add_parser("verify-audit", help="verify the audit log hash chain against the store")
+    v.set_defaults(func=cmd_verify_audit)
+    for q in (p, s, e, r, v):
         q.add_argument("--config", default=DEFAULT_CONFIG)
         q.add_argument("--advisory-dir", default=None)
     args = parser.parse_args()

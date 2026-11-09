@@ -1,29 +1,42 @@
 {
   "schema_version": 1,
-  "purpose": "Six Grok reasoning agents, advisory only. NOT activated: activation needs this flag, an operator-chosen model, GROK_AGENTS_ACTIVATED=1, XAI_API_KEY in the environment and --i-have-activation-approval.",
+  "purpose": "Six Grok reasoning agents, advisory only. NOT activated: activation needs this flag, GROK_AGENTS_ACTIVATED=1, XAI_API_KEY in the environment (never in a file) and --i-have-activation-approval.",
   "activated": false,
-  "model": null,
+  "model": "grok-4.20-0309-non-reasoning",
+  "model_note": "Operator-chosen initial candidate (2026-11-09). Listed on docs.x.ai/docs/models on 2026-11-09 (1M context). Structured-output support for this exact id must be confirmed by the activation smoke test.",
   "base_url": "https://api.x.ai",
+  "structured_output": "json_schema_strict",
   "timeout_s": 30,
   "max_tokens": 800,
   "daily_call_budget": 60,
-  "daily_usd_budget": null,
-  "pricing_usd_per_million": {"input": null, "output": null, "source": "https://docs.x.ai/docs/models",
-                              "note": "Set from the official price list for the chosen model at activation. The xai transport refuses to start without input/output prices and a positive daily_usd_budget."},
+  "daily_usd_budget": 1.0,
+  "pricing_usd_per_million": {"input": 1.25, "output": 2.50, "cached_input": 0.20,
+                              "source": "https://docs.x.ai/docs/models (grok-4.20-0309-non-reasoning, < 200k prompt tokens; retrieved 2026-11-09)",
+                              "note": "Re-verify on the day of activation. The guard charges all input at the full input price (cached discount ignored)."},
+  "review_trigger": {
+    "mode": "candidate_signals",
+    "statuses": ["evaluated"],
+    "max_signal_age_hours": 6,
+    "max_reviews_per_run": 3,
+    "note": "Reviews only forward signals of candidate strategies that the deterministic risk engine has already decided. No periodic market briefs. Local store polling makes no AI call."
+  },
   "advisory_dir": "state/grok_advisory",
   "runners": {
     "xau_orb": {
       "market": "xauusd_mt5",
+      "candidate_strategies": ["orb_newyork"],
       "shadow_db": "state/phase2d_shadow/shadow.sqlite",
       "calendar_db": "state/phase2d_shadow/calendar.sqlite"
     },
     "xau_selective_a": {
       "market": "xauusd_mt5",
+      "candidate_strategies": ["selective_a"],
       "shadow_db": "state/xau_selective_a_shadow/shadow.sqlite",
       "calendar_db": "state/xau_selective_a_shadow/calendar.sqlite"
     },
     "btc_donchian": {
       "market": "btcusdt_binance_spot",
+      "candidate_strategies": ["donchian"],
       "shadow_db": "state/phase2e_binance_shadow/shadow.sqlite"
     }
   }

@@ -18,13 +18,18 @@ param(
     [switch]$Remove,
     [string]$Repo = "C:\Users\Admin\Projects\kronos-selective-a-shadow",
     [string]$Python = "C:\Users\Admin\Projects\kronos-trading-research\.venv311\Scripts\python.exe",
+    [string]$BackupRoot = "C:\Users\Admin\KronosBackups\xau_selective_a_shadow",
+    [int]$BackupKeep = 14,
     [ValidateSet("none", "system", "display")][string]$KeepAwake = "system"
 )
 
 $taskName = "Kronos Shadow XAUUSD Selective A"
+$backupName = "Kronos Backup XAUUSD Selective A"
 if ($Remove) {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    "removed: $taskName"
+    foreach ($n in @($taskName, $backupName)) {
+        Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+        "removed: $n"
+    }
     return
 }
 
@@ -61,13 +66,33 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory $R
 $task = New-ScheduledTask -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal `
     -Description "Kronos XAUUSD Selective Strategy A read-only shadow runner supervisor (simulation only; no orders). STOP file in the state directory prevents starts."
 
+# Daily online backup of the SQLite state (read-only on the source; research.state_backup) at 00:30 local time
+# (21:30 UTC, inside the daily XAUUSD maintenance break), outside the repository, newest $BackupKeep sets kept.
+$backupAction = New-ScheduledTaskAction -Execute $Python -WorkingDirectory $Repo `
+    -Argument "-m research.state_backup --state-dir `"$state`" --dest `"$BackupRoot`" --keep $BackupKeep"
+$backupSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$backupTask = New-ScheduledTask -Action $backupAction -Trigger (New-ScheduledTaskTrigger -Daily -At "00:30") `
+    -Settings $backupSettings -Principal $principal `
+    -Description "Kronos Selective A shadow state backup (online SQLite copy through a read-only connection)."
+if ($BackupRoot.StartsWith($Repo, [StringComparison]::OrdinalIgnoreCase)) { $problems += "BackupRoot must be outside the checkout" }
+
 if ($Apply) {
     if ($problems.Count -gt 0) { throw "Refusing to register ${taskName}: $($problems -join '; ')" }
-    Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+    # Re-registering an EXISTING task ends its running instance (and the process tree it started). Never
+    # re-register a runner task while it runs; this script only creates the Selective A tasks.
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { throw "$taskName already exists; refusing to overwrite a possibly running task" }
+    Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
     "registered: $taskName"
+    if (-not (Get-ScheduledTask -TaskName $backupName -ErrorAction SilentlyContinue)) {
+        Register-ScheduledTask -TaskName $backupName -InputObject $backupTask | Out-Null
+        "registered: $backupName"
+    }
 } else {
     "---- DRY RUN (not registered): $taskName"
     ($task | Export-ScheduledTask)
+    "---- DRY RUN (not registered): $backupName"
+    ($backupTask | Export-ScheduledTask)
     if ($problems.Count -gt 0) { "Pre-launch checks NOT met: $($problems -join '; ')" } else { "Pre-launch checks met." }
     "No changes made. Re-run with -Apply only after the launch is approved."
 }
