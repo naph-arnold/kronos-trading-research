@@ -154,6 +154,15 @@ def create_app(config_path: Path | None = None) -> FastAPI:
     def grok():
         return cached("grok", 10, lambda: services.grok_room(cfg))
 
+    # Monte Carlo research: precomputed, versioned reports only. No request can start a simulation.
+    @app.get("/api/montecarlo")
+    def montecarlo_index():
+        return cached("mc_index", 60, lambda: services.montecarlo_index(cfg))
+
+    @app.get("/api/montecarlo/{report_id}")
+    def montecarlo_report(report_id: str):
+        return cached(("mc", report_id), 60, lambda: services.montecarlo_report(cfg, report_id))
+
     if WEB_OUT.exists():
         app.mount("/_next", StaticFiles(directory=WEB_OUT / "_next"), name="next-assets")
 

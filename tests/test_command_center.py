@@ -538,3 +538,33 @@ def test_strategy_with_own_runner_uses_its_own_heartbeat_and_rules(tmp_path):
     assert "Warm-up period until" in d["explanation"]
     age = lambda x: int(next(c["detail"] for c in x["checks"] if c["check"] == "Runner heartbeat").split("last ")[1].split(" s")[0])  # noqa: E731
     assert age(ds["xau_orb"]) - age(d) == 23  # own runner beat 7 s before the reference, the gold runner 30 s
+
+
+def test_montecarlo_reports_are_served_read_only_and_never_simulated(tmp_path):
+    pytest.importorskip("fastapi")
+    cfg = _cfg(tmp_path)
+    reports = tmp_path / "mc" / "v1" / "reports"
+    reports.mkdir(parents=True)
+    rep = {"market": "xauusd", "strategy": "orb_newyork", "partition": "historical_holdout", "status": "complete",
+           "evidence": {"closed_trades": 32}, "variants": [], "dataset": {"provenance": {"file": str(reports / "x.json")}}}
+    (reports / "xauusd__orb_newyork__historical_holdout.json").write_text(json.dumps(rep))
+    (reports.parent / "index.json").write_text(json.dumps({"reports": [
+        {"id": "xauusd__orb_newyork__historical_holdout", "market": "xauusd", "strategy": "orb_newyork",
+         "partition": "historical_holdout", "status": "complete", "closed_trades": 32, "file": "x"},
+        {"id": "../../secret", "market": "x", "strategy": "x", "partition": "x", "status": "x", "file": "x"}]}))
+    c = _client(tmp_path, cfg, montecarlo={"reports_dir": str(reports)})
+    idx = c.get("/api/montecarlo").json()
+    assert [r["id"] for r in idx["reports"]] == ["xauusd__orb_newyork__historical_holdout"]  # unsafe ids dropped
+    body = c.get("/api/montecarlo/xauusd__orb_newyork__historical_holdout")
+    assert body.status_code == 200 and str(reports) not in body.text and "<montecarlo reports>" in body.text
+    assert c.get("/api/montecarlo/..%2F..%2Fsecret").status_code == 404
+    assert c.get("/api/montecarlo/btcusdt__x__forward").status_code == 404
+    assert c.post("/api/montecarlo").status_code == 405  # nothing can start a simulation
+    before = sorted(p.name for p in reports.parent.rglob("*"))
+    c.get("/api/montecarlo")
+    assert sorted(p.name for p in reports.parent.rglob("*")) == before
+    src = Path("command_center/services.py").read_text(encoding="utf-8") + Path("command_center/api.py").read_text(encoding="utf-8")
+    assert "import research.montecarlo" not in src and "from research.montecarlo" not in src  # never imports the engine
+    services.CACHE._items.clear()
+    empty = _client(tmp_path, cfg).get("/api/montecarlo").json()
+    assert empty["available"] is False

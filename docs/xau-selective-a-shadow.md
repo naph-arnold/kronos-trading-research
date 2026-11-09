@@ -1,6 +1,6 @@
-# XAUUSD Selective Strategy A: independent shadow forward test (prepared, not launched)
+# XAUUSD Selective Strategy A: independent shadow forward test
 
-Status 2026-11-09: **prepared and tested; NOT launched.**
+Status 2026-11-09: **LAUNCHED 05:55:30 UTC** (operator-authorized local shadow test; see section 10). Forward evidence starts at the pre-registered boundary 2026-11-16 00:00 UTC; everything earlier is warm-up.
 - A third runner starts only after the operator approves the launch-readiness checklist (section 6).
 - Simulation only. Market data is read-only MT5. No orders of any kind.
 - The XAUUSD NY ORB runner (Phase 2D) and the BTC/USDT Donchian runner (Phase 2E) are not touched: their code,
@@ -249,3 +249,44 @@ runner (a hypothesis, not established).
 | Duplicate instance | `StateLock` refuses a second process on the same state; the supervisor mutex and running-runner scan add two more layers |
 | Restart recovery | Bars, books, signals and decisions are restored with 0 mismatches, also on live MT5 data in the preflight (section 7) |
 | Backup | Consistent online copy through a read-only connection, integrity check, digest manifest, retention, tamper detection |
+
+## 10. Launch record (2026-11-09)
+**Authorization.** The operator authorised a local, continuous, read-only shadow-testing process, provided every
+preflight check passed. Launch steps without separate approval were excluded: no new scheduled tasks and no
+operating-system changes.
+
+**Preflight:**
+
+| Check | Result |
+| --- | --- |
+| Frozen parameters and pre-registration hash | `load_config` accepted; hash `b8574f53…` |
+| Forward start | `unseen_window_starts` 2026-11-16T00:00:00Z, unchanged |
+| State directory | absent before launch (clean); 24 books created at start |
+| NY ORB and Donchian runners | running, heartbeats fresh, MT5 and WebSocket connected |
+| Safety tests (deployment checkout) | 21/21: STOP/KILL, restart recovery, duplicate instance, MT5 write functions blocked, backup |
+| Memory | First check (~05:40 UTC): **0.78–1.11 GB available, FAILED** (launch held). Re-check (~05:53 UTC): 2.47–2.57 GB available, commit headroom 4.7 GB, CPU ~11%: passed. Nothing was stopped to free memory. |
+
+**Launch:**
+1. Approval commit `c731b45` on `deploy/xau-selective-a` sets only `launch_approved: true`.
+2. The task-script dry run reported "Pre-launch checks met"; the task was **not** registered.
+3. The shared supervisor was started as a hidden process with the same arguments as the prepared task
+   (`-Name xauselectivea`; supervisor pid 828, runner pid 25972).
+4. It is **not persistent**: it stops at logoff or reboot until the operator approves registering the task.
+
+**Verified after launch:**
+- MetaQuotes-Demo demo account: balance and equity 3000, 0 positions, 0 orders, unchanged.
+- Read-only proxy active.
+- Warm-up loaded: 13,037 M5 bars (2026-09-01 → 2026-11-09 05:55).
+- 24 books: Strategy A + 5 random controls × {10,000, 3,000 USD} × {0, 7 USD/lot}. Realized P&L 0; reconciliation ok.
+- Heartbeat: running, MT5 connected, data fresh, calendar `broker_verified`, guards pass.
+- Signals so far: warm-up only, 0 decisions and 0 trades.
+- Initial-state backup `C:\Users\Admin\KronosBackups\xau_selective_a_shadow\backup_20261109T055756Z`, verified
+  (`--verify` ok).
+- Command Center: lifecycle **running**; the decision card uses Strategy A's own heartbeat (fix `386bca5`).
+
+**Observed side effect to watch:**
+- The BTC runner had a 222 s heartbeat gap, 05:55:17 → 05:58:59. It began 13 s before Strategy A started and overlapped
+  its warm-up.
+- A 178 s gap had already occurred at 05:35, before the launch.
+- No restart, no error event, status ok afterwards. See command-center.md section 8.1 for the existing BTC gap
+  analysis.

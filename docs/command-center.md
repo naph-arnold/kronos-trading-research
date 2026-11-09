@@ -246,6 +246,20 @@ Recommendation (requires approval; the frozen runner was not modified):
 
 The dashboard now shows each gap under "Resolved warnings" with the runner's own evidence.
 
+## 8.2 Monte Carlo research page (branch `research/monte-carlo-validation`)
+`/montecarlo/`:
+- **Selectors:** market, strategy and dataset (★ = frozen forward candidate), sampling method, sizing policy and cost scenario.
+- **Distributions:** net return and maximum drawdown with p5, p50 and p95 markers; losing streaks and recovery, with censored paths shown separately.
+- **Analysis:** threshold probabilities with Monte Carlo error; fixed vs adaptive and recorded vs stress comparisons; sensitivity to method and block length; regime coverage.
+- **Context:** provenance, evidence and limitations.
+
+Datasets without enough closed trades show **"Insufficient trading data"** and no chart.
+
+How it stays read-only:
+- The API exposes `/api/montecarlo` and `/api/montecarlo/{id}`.
+- Report ids are allow-listed by pattern, paths are scrubbed, and responses are cached for 60 s.
+- The dashboard never imports the simulation engine.
+
 ## 9. Not in V1 (future versions)
 - Controls (STOP/KILL buttons, runner start/stop, agent activation). These need a separate authenticated,
   audited design and approval.

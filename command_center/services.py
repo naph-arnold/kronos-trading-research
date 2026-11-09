@@ -849,6 +849,39 @@ def signal_detail(cfg: dict, runner_id: str, signal_id: str) -> dict:
                           "and no book acted on it.") if sig["status"] == "warmup" else None}
 
 
+# --------------------------------------------------------------------------- Monte Carlo research reports
+
+_MC_ID = __import__("re").compile(r"^[a-z0-9_]+__[a-z0-9_]+__(historical_holdout|development|forward)$")
+
+
+def _mc_dir(cfg: dict) -> Path | None:
+    d = (cfg.get("montecarlo") or {}).get("reports_dir")
+    return Path(d) if d else None
+
+
+def montecarlo_index(cfg: dict) -> dict:
+    """List the precomputed Monte Carlo reports (read-only; the dashboard never runs a simulation)."""
+    d = _mc_dir(cfg)
+    if d is None or not (d.parent / "index.json").exists():
+        return {"available": False, "reports": [],
+                "note": "No Monte Carlo reports have been generated (python -m research.montecarlo run)."}
+    idx = json.loads((d.parent / "index.json").read_text(encoding="utf-8"))
+    return {"available": True, "algorithm": idx.get("algorithm"), "updated_at": idx.get("updated_at"),
+            "reports": [r for r in idx["reports"] if _MC_ID.match(r["id"])]}
+
+
+def montecarlo_report(cfg: dict, report_id: str) -> dict:
+    d = _mc_dir(cfg)
+    if d is None or not _MC_ID.match(report_id):
+        raise KeyError(report_id)
+    path = d / f"{report_id}.json"
+    if not path.is_file():
+        raise KeyError(report_id)
+    rep = json.loads(path.read_text(encoding="utf-8"))
+    rep.get("dataset", {}).pop("trades", None)  # reports never carry trade lists; defensive
+    return rep
+
+
 # --------------------------------------------------------------------------- response hygiene
 
 def _sensitive_roots(cfg: dict) -> list[tuple[str, str]]:
@@ -862,6 +895,8 @@ def _sensitive_roots(cfg: dict) -> list[tuple[str, str]]:
                 roots.append((s[key], f"<{s['id']} {key}>"))
     g = cfg.get("grok", {})
     roots += [(d, "<advisory store>") for d in g.get("advisory_dirs", [])]
+    if (cfg.get("montecarlo") or {}).get("reports_dir"):
+        roots.append((cfg["montecarlo"]["reports_dir"], "<montecarlo reports>"))
     if g.get("config"):
         roots.append((g["config"], "<grok config>"))
     roots.append((str(Path.home()), "<home>"))
