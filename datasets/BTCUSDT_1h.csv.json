@@ -1,9 +1,9 @@
 {
-  "end_ms": 1795251600000,
+  "end_ms": 1795338000000,
   "interval": "1h",
-  "row_count": 527,
+  "row_count": 551,
   "schema_version": 1,
-  "sha256": "c5e303cef02257acccc20801b5c7a928c64fa6ccd8b89e04518c40d7d59c8efa",
+  "sha256": "ec6fb711db644f0b3d4e6217d248f241cf9abc1423caf28455c69e40fa48da98",
   "source": "binance_spot",
   "start_ms": 1793354400000,
   "symbol": "BTCUSDT"
